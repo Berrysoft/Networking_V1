@@ -5,6 +5,7 @@
 #include <experimental/netfwd>
 #include <future>
 #include <memory>
+#include <mutex>
 #include <tuple>
 #include <type_traits>
 
@@ -79,13 +80,15 @@ namespace std
                 child
             };
 
+            class _Service_registry;
+
             class execution_context
             {
             public:
                 class service
                 {
                 protected:
-                    explicit service(execution_context& owner) : context_(owner) {}
+                    explicit service(execution_context& owner) : context_(owner), next_(nullptr) {}
                     service(const service&) = delete;
                     service& operator=(const service&) = delete;
                     virtual ~service();
@@ -93,10 +96,13 @@ namespace std
                     execution_context& context() noexcept { return context_; }
 
                 private:
+                    friend class _Service_registry;
+
                     virtual void shutdown() noexcept = 0;
-                    virtual void notify_fork(fork_event e) {}
+                    virtual void notify_fork(fork_event) {}
 
                     execution_context& context_;
+                    unique_ptr<execution_context::service> next_;
                 };
 
                 execution_context();
@@ -104,27 +110,70 @@ namespace std
                 execution_context& operator=(const execution_context&) = delete;
                 virtual ~execution_context();
 
-                void notify_fork(fork_event e);
+                void notify_fork(fork_event e) { service_registry_->notify_fork(e); }
 
             protected:
-                void shutdown() noexcept;
-                void destroy() noexcept;
+                void shutdown() noexcept { service_registry_->shutdown_services(); }
+                void destroy() noexcept { service_registry_->destroy_services(); }
+
+            private:
+                unique_ptr<_Service_registry> service_registry_;
+            };
+
+            class _Service_registry
+            {
+            public:
+                _Service_registry(execution_context& owner);
+                ~_Service_registry();
+
+                void shutdown_services();
+                void destroy_services();
+                void notify_fork(fork_event fork_ev);
+
+                template <typename Service>
+                Service& use_service();
+
+                template <typename Service>
+                Service& use_service(io_context& owner);
+
+                template <typename Service>
+                void add_service(unique_ptr<Service>&& new_service);
+
+                template <typename Service>
+                bool has_service() const;
+
+            private:
+                mutable mutex mutex_;
+                execution_context& owner;
+                unique_ptr<execution_context::service> first_service_;
             };
 
             class service_already_exists : public logic_error
             {
             public:
-                service_already_exists() : logic_error("The service is already present.") {}
+                service_already_exists() : logic_error("Service already exists.") {}
             };
 
             template <class Service>
-            typename Service::key_type& use_service(execution_context& ctx);
+            inline Service& use_service(execution_context& ctx)
+            {
+                return ctx.service_registry_->use_service<Service>();
+            }
 
             template <class Service, class... Args>
-            typename Service::key_type& make_service(execution_context& ctx, Args&&... args);
+            inline Service& make_service(execution_context& ctx, Args&&... args)
+            {
+                unique_ptr<Service> svc = make_unique<Service>(ctx, forward<Args>(args)...);
+                Service& result = *svc;
+                ctx.service_registry_->add_service<Service>(move(svc));
+                return result;
+            }
 
             template <class Service>
-            bool has_service(execution_context& ctx) noexcept;
+            inline bool has_service(execution_context& ctx) noexcept
+            {
+                return ctx.service_registry_->has_service<Service>();
+            }
 
             template <class T, class = void, class = void, class = void, class = void, class = void, class = void>
             struct is_executor : false_type
