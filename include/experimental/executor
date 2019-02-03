@@ -1,13 +1,19 @@
 #ifndef NET_EXECUTOR
 #define NET_EXECUTOR
 
+#include <condition_variable>
+#include <deque>
 #include <exception>
 #include <experimental/netfwd>
+#include <functional>
 #include <future>
+#include <map>
 #include <memory>
 #include <mutex>
+#include <thread>
 #include <tuple>
 #include <type_traits>
+#include <typeindex>
 
 namespace std
 {
@@ -88,7 +94,7 @@ namespace std
                 class service
                 {
                 protected:
-                    explicit service(execution_context& owner) : context_(owner), next_(nullptr) {}
+                    explicit service(execution_context& owner) : context_(owner) {}
                     service(const service&) = delete;
                     service& operator=(const service&) = delete;
                     virtual ~service();
@@ -102,7 +108,6 @@ namespace std
                     virtual void notify_fork(fork_event) {}
 
                     execution_context& context_;
-                    unique_ptr<execution_context::service> next_;
                 };
 
                 execution_context();
@@ -110,14 +115,29 @@ namespace std
                 execution_context& operator=(const execution_context&) = delete;
                 virtual ~execution_context();
 
-                void notify_fork(fork_event e) { service_registry_->notify_fork(e); }
+                void notify_fork(fork_event e) { service_registry_.notify_fork(e); }
+
+                template <class Service>
+                friend typename Service::key_type& use_service(execution_context& ctx);
+
+                template <class Service, class... Args>
+                friend Service& make_service(execution_context& ctx, Args&&... args);
+
+                template <class Service>
+                friend bool has_service(execution_context& ctx) noexcept;
 
             protected:
-                void shutdown() noexcept { service_registry_->shutdown_services(); }
-                void destroy() noexcept { service_registry_->destroy_services(); }
+                void shutdown() noexcept { service_registry_.shutdown_services(); }
+                void destroy() noexcept { service_registry_.destroy_services(); }
 
             private:
-                unique_ptr<_Service_registry> service_registry_;
+                _Service_registry service_registry_;
+            };
+
+            class service_already_exists : public logic_error
+            {
+            public:
+                service_already_exists() : logic_error("Service already exists.") {}
             };
 
             class _Service_registry
@@ -131,48 +151,61 @@ namespace std
                 void notify_fork(fork_event fork_ev);
 
                 template <typename Service>
-                Service& use_service();
+                typename Service::key_type& use_service()
+                {
+                    lock_guard<mutex> lock{ mutex_ };
+                    type_index tid{ typeid(typename Service::key_type) };
+                    auto it{ services_.find(tid) };
+                    if (it == services_.end())
+                    {
+                        it = services_.emplace(tid, make_unique<Service>(ctx)).first;
+                    }
+                    return *(it->second);
+                }
 
                 template <typename Service>
-                Service& use_service(io_context& owner);
+                Service& add_service(unique_ptr<Service>&& new_service)
+                {
+                    lock_guard<mutex> lock{ mutex_ };
+                    type_index tid{ typeid(typename Service::key_type) };
+                    if (services_.find(tid) != services_.end())
+                    {
+                        throw service_already_exists{};
+                    }
+                    auto it{ services_.emplace(tid, new_service).first };
+                    return *(it->second);
+                }
 
                 template <typename Service>
-                void add_service(unique_ptr<Service>&& new_service);
-
-                template <typename Service>
-                bool has_service() const;
+                bool has_service() const
+                {
+                    lock_guard<mutex> lock{ mutex_ };
+                    type_index tid{ typeid(typename Service::key_type) };
+                    return services_.find(tid) != services_.end();
+                }
 
             private:
                 mutable mutex mutex_;
-                execution_context& owner;
-                unique_ptr<execution_context::service> first_service_;
-            };
-
-            class service_already_exists : public logic_error
-            {
-            public:
-                service_already_exists() : logic_error("Service already exists.") {}
+                execution_context& owner_;
+                map<type_index, unique_ptr<execution_context::service>> services_;
             };
 
             template <class Service>
-            inline Service& use_service(execution_context& ctx)
+            inline typename Service::key_type& use_service(execution_context& ctx)
             {
-                return ctx.service_registry_->use_service<Service>();
+                return ctx.service_registry_.use_service<Service>();
             }
 
             template <class Service, class... Args>
             inline Service& make_service(execution_context& ctx, Args&&... args)
             {
-                unique_ptr<Service> svc = make_unique<Service>(ctx, forward<Args>(args)...);
-                Service& result = *svc;
-                ctx.service_registry_->add_service<Service>(move(svc));
-                return result;
+                return ctx.service_registry.add_service<Service>(make_unique<Service>(ctx, forward<Args>(args)...));
             }
 
             template <class Service>
             inline bool has_service(execution_context& ctx) noexcept
             {
-                return ctx.service_registry_->has_service<Service>();
+                return ctx.service_registry_.has_service<Service>();
             }
 
             template <class T, class = void, class = void, class = void, class = void, class = void, class = void>
@@ -246,19 +279,19 @@ namespace std
             template <class T>
             inline associated_executor_t<T> get_associated_executor(const T& t) noexcept
             {
-                associated_executor<T>::get(t);
+                return associated_executor<T>::get(t);
             }
 
             template <class T, class Executor>
             inline associated_executor_t<T, Executor> get_associated_executor(const T& t, const Executor& ex) noexcept
             {
-                associated_executor<T, Executor>::get(t, ex);
+                return associated_executor<T, Executor>::get(t, ex);
             }
 
             template <class T, class ExecutionContext>
             inline associated_executor_t<T, typename ExecutionContext::executor_type> get_associated_executor(const T& t, ExecutionContext& ctx) noexcept
             {
-                get_associated_executor(t, ctx.get_executor());
+                return get_associated_executor(t, ctx.get_executor());
             }
 
             template <class T, class Executor>
@@ -416,6 +449,52 @@ namespace std
                 return make_work_guard(get_associated_executor(t, forward<U>(u)));
             }
 
+            class _Thread_pool
+            {
+            private:
+                deque<thread> threads_;
+                deque<function<void()>> jobs_;
+                mutex jobs_mutex_;
+                condition_variable cond_;
+                mutex cond_mutex_;
+                bool stopped_;
+
+            public:
+                _Thread_pool();
+
+                void start();
+                void post(function<void()>&& f);
+                void stop();
+                void join();
+                bool stopped() const noexcept { return stopped_; }
+
+            private:
+                void do_job();
+            };
+
+            class system_context : public execution_context
+            {
+            public:
+                using executor_type = system_executor;
+
+                system_context(const system_context&) = delete;
+                system_context& operator=(const system_context&) = delete;
+                ~system_context();
+
+                executor_type get_executor() noexcept { return system_executor{}; }
+
+                void stop() { pool_.stop(); }
+                bool stopped() const noexcept { return pool_.stopped(); }
+                void join() { pool_.join(); }
+
+            private:
+                friend class system_executor;
+
+                system_context();
+
+                _Thread_pool pool_;
+            };
+
             class system_executor
             {
             public:
@@ -427,32 +506,27 @@ namespace std
                 void on_work_finished() const noexcept {}
 
                 template <class Func, class ProtoAllocator>
-                void dispatch(Func&& f, const ProtoAllocator& a) const;
+                void dispatch(Func&& f, const ProtoAllocator&) const
+                {
+                    decay_t<Func> tmp{ forward<Func>(f) };
+                    tmp();
+                }
                 template <class Func, class ProtoAllocator>
-                void post(Func&& f, const ProtoAllocator& a) const;
+                void post(Func&& f, const ProtoAllocator& a) const
+                {
+                    typename allocator_traits<Allocator>::template rebind_alloc<char> b{ a };
+                    function<void()> tmp{ allocator_arg, b, forward<Func>(f) };
+                    context().pool_.post(move(tmp));
+                }
                 template <class Func, class ProtoAllocator>
-                void defer(Func&& f, const ProtoAllocator& a) const;
+                void defer(Func&& f, const ProtoAllocator& a) const
+                {
+                    post(forward<Func>(f), a);
+                }
             };
 
             inline bool operator==(const system_executor&, const system_executor&) { return true; }
             inline bool operator!=(const system_executor&, const system_executor&) { return false; }
-
-            class system_context
-            {
-            public:
-                using executor_type = system_executor;
-
-                system_context() = delete;
-                system_context(const system_context&) = delete;
-                system_context& operator=(const system_context&) = delete;
-                ~system_context();
-
-                executor_type get_executor() noexcept { return system_executor{}; }
-
-                void stop();
-                bool stopped() const noexcept;
-                void join();
-            };
 
             class bad_executor : public exception
             {
@@ -532,9 +606,26 @@ namespace std
             inline bool operator!=(nullptr_t, const executor& e) noexcept { return (bool)e; }
 
             template <class CompletionToken>
-            auto dispatch(CompletionToken&& token);
-            template <class Executor, class CompletionToken>
-            auto dispatch(const Executor& ex, CompletionToken&& token);
+            inline auto dispatch(CompletionToken&& token)
+            {
+                async_completion<CompletionToken, void()> completion{ forward<CompletionToken>(token) };
+                auto ex{ get_associated_executor(completion.completion_handler) };
+                auto alloc{ get_associated_allocator(completion.completion_handler) };
+                ex.dispatch(move(completion.completion_handler), alloc);
+                return completion.result.get();
+            }
+            template <class Executor, class CompletionToken, class = enable_if_t<is_executor_v<Executor>>>
+            inline auto dispatch(const Executor& ex, CompletionToken&& token)
+            {
+                async_completion<CompletionToken, void()> completion{ forward<CompletionToken>(token) };
+                auto alloc{ get_associated_allocator(completion.completion_handler) };
+                auto f{ [h = move(completion.completion_handler), w = make_work_guard(h), &alloc]() {
+                    w.get_executor().dispatch(move(h), alloc);
+                    w.reset();
+                } };
+                ex.dispatch(move(f), alloc);
+                return completion.result.get();
+            }
             template <class ExecutionContext, class CompletionToken, class = enable_if_t<is_convertible_v<ExecutionContext&, execution_context&>>>
             inline auto dispatch(ExecutionContext& ctx, CompletionToken&& token)
             {
@@ -542,9 +633,26 @@ namespace std
             }
 
             template <class CompletionToken>
-            auto post(CompletionToken&& token);
-            template <class Executor, class CompletionToken>
-            auto post(const Executor& ex, CompletionToken&& token);
+            inline auto post(CompletionToken&& token)
+            {
+                async_completion<CompletionToken, void()> completion{ forward<CompletionToken>(token) };
+                auto ex{ get_associated_executor(completion.completion_handler) };
+                auto alloc{ get_associated_allocator(completion.completion_handler) };
+                ex.post(move(completion.completion_handler), alloc);
+                return completion.result.get();
+            }
+            template <class Executor, class CompletionToken, class = enable_if_t<is_executor_v<Executor>>>
+            inline auto post(const Executor& ex, CompletionToken&& token)
+            {
+                async_completion<CompletionToken, void()> completion{ forward<CompletionToken>(token) };
+                auto alloc{ get_associated_allocator(completion.completion_handler) };
+                auto f{ [h = move(completion.completion_handler), w = make_work_guard(h), &alloc]() {
+                    w.get_executor().dispatch(move(h), alloc);
+                    w.reset();
+                } };
+                ex.post(move(f), alloc);
+                return completion.result.get();
+            }
             template <class ExecutionContext, class CompletionToken, class = enable_if_t<is_convertible_v<ExecutionContext&, execution_context&>>>
             inline auto post(ExecutionContext& ctx, CompletionToken&& token)
             {
@@ -552,9 +660,26 @@ namespace std
             }
 
             template <class CompletionToken>
-            auto defer(CompletionToken&& token);
-            template <class Executor, class CompletionToken>
-            auto defer(const Executor& ex, CompletionToken&& token);
+            inline auto defer(CompletionToken&& token)
+            {
+                async_completion<CompletionToken, void()> completion{ forward<CompletionToken>(token) };
+                auto ex{ get_associated_executor(completion.completion_handler) };
+                auto alloc{ get_associated_allocator(completion.completion_handler) };
+                ex.defer(move(completion.completion_handler), alloc);
+                return completion.result.get();
+            }
+            template <class Executor, class CompletionToken, class = enable_if_t<is_executor_v<Executor>>>
+            inline auto defer(const Executor& ex, CompletionToken&& token)
+            {
+                async_completion<CompletionToken, void()> completion{ forward<CompletionToken>(token) };
+                auto alloc{ get_associated_allocator(completion.completion_handler) };
+                auto f{ [h = move(completion.completion_handler), w = make_work_guard(h), &alloc]() {
+                    w.get_executor().dispatch(move(h), alloc);
+                    w.reset();
+                } };
+                ex.defer(move(f), alloc);
+                return completion.result.get();
+            }
             template <class ExecutionContext, class CompletionToken, class = enable_if_t<is_convertible_v<ExecutionContext&, execution_context&>>>
             inline auto defer(ExecutionContext& ctx, CompletionToken&& token)
             {
@@ -728,7 +853,7 @@ namespace std
                 template <typename Allocator>
                 void create_promise(const Allocator& a)
                 {
-                    typename allocator_traits<Allocator>::template rebind_alloc<char> b(a);
+                    typename allocator_traits<Allocator>::template rebind_alloc<char> b{ a };
                     p_ = allocate_shared<promise<T>>(b, allocator_arg, b);
                 }
 
