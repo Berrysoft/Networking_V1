@@ -1,9 +1,11 @@
 #ifndef NET_EXECUTOR
 #define NET_EXECUTOR
 
+#include <exception>
 #include <experimental/netfwd>
 #include <future>
 #include <memory>
+#include <tuple>
 #include <type_traits>
 
 namespace std
@@ -31,7 +33,7 @@ namespace std
             {
                 using completion_handler_type = async_result<decay_t<CompletionToken>, Signature>::completion_handler_type;
 
-                explicit async_completion(CompletionToken& t);
+                explicit async_completion(CompletionToken& t) : completion_handler(forward<CompletionToken>(t)), result(completion_handler) {}
                 async_completion(const async_completion&) = delete;
                 async_completion& operator=(const async_completion&) = delete;
 
@@ -59,13 +61,13 @@ namespace std
             using associated_allocator_t = typename associated_allocator<T, ProtoAllocator>::type;
 
             template <class T>
-            associated_allocator_t<T> get_associated_allocator(const T& t) noexcept
+            inline associated_allocator_t<T> get_associated_allocator(const T& t) noexcept
             {
                 return associated_allocator<T>::get(t);
             }
 
             template <class T, class ProtoAllocator>
-            associated_allocator_t<T, ProtoAllocator> get_associated_allocator(const T& t, const ProtoAllocator& a) noexcept
+            inline associated_allocator_t<T, ProtoAllocator> get_associated_allocator(const T& t, const ProtoAllocator& a) noexcept
             {
                 return associated_allocator<T, ProtoAllocator>::get(t, a);
             }
@@ -111,6 +113,8 @@ namespace std
 
             class service_already_exists : public logic_error
             {
+            public:
+                service_already_exists() : logic_error("The service is already present.") {}
             };
 
             template <class Service>
@@ -159,7 +163,7 @@ namespace std
             constexpr bool uses_executor_v{ uses_executor<T, Executor>::value };
 
             template <class T, class Executor, typename... Args>
-            constexpr T _Uses_executor_construct(const Executor& ex, Args&&... args)
+            inline T _Uses_executor_construct(const Executor& ex, Args&&... args)
             {
                 if constexpr (uses_executor_v<T, Executor> && is_constructible_v<T, executor_arg_t, Executor, Args&&...>)
                 {
@@ -191,19 +195,19 @@ namespace std
             using associated_executor_t = typename associated_executor<T, Executor>::type;
 
             template <class T>
-            associated_executor_t<T> get_associated_executor(const T& t) noexcept
+            inline associated_executor_t<T> get_associated_executor(const T& t) noexcept
             {
                 associated_executor<T>::get(t);
             }
 
             template <class T, class Executor>
-            associated_executor_t<T, Executor> get_associated_executor(const T& t, const Executor& ex) noexcept
+            inline associated_executor_t<T, Executor> get_associated_executor(const T& t, const Executor& ex) noexcept
             {
                 associated_executor<T, Executor>::get(t, ex);
             }
 
             template <class T, class ExecutionContext>
-            associated_executor_t<T, typename ExecutionContext::executor_type> get_associated_executor(const T& t, ExecutionContext& ctx) noexcept
+            inline associated_executor_t<T, typename ExecutionContext::executor_type> get_associated_executor(const T& t, ExecutionContext& ctx) noexcept
             {
                 get_associated_executor(t, ctx.get_executor());
             }
@@ -291,13 +295,13 @@ namespace std
             };
 
             template <class Executor, class T>
-            executor_binder<decay_t<T>, Executor> bind_executor(const Executor& ex, T&& t)
+            inline executor_binder<decay_t<T>, Executor> bind_executor(const Executor& ex, T&& t)
             {
                 return executor_binder<decay_t<T>, Executor>(forward<T>(t), ex);
             }
 
             template <class ExecutionContext, class T>
-            executor_binder<decay_t<T>, typename ExecutionContext::executor_type> bind_executor(ExecutionContext& ctx, T&& t)
+            inline executor_binder<decay_t<T>, typename ExecutionContext::executor_type> bind_executor(ExecutionContext& ctx, T&& t)
             {
                 return bind_executor(ctx.get_executor(), forward<T>(t));
             }
@@ -340,25 +344,25 @@ namespace std
             };
 
             template <class Executor>
-            executor_work_guard<Executor> make_work_guard(const Executor& ex)
+            inline executor_work_guard<Executor> make_work_guard(const Executor& ex)
             {
                 return executor_work_guard<Executor>(ex);
             }
 
             template <class ExecutionContext>
-            executor_work_guard<typename ExecutionContext::executor_type> make_work_guard(ExecutionContext& ctx)
+            inline executor_work_guard<typename ExecutionContext::executor_type> make_work_guard(ExecutionContext& ctx)
             {
                 return make_work_guard(ctx.get_executor());
             }
 
             template <class T>
-            executor_work_guard<associated_executor_t<T>> make_work_guard(const T& t)
+            inline executor_work_guard<associated_executor_t<T>> make_work_guard(const T& t)
             {
                 return make_work_guard(get_associated_executor(t));
             }
 
             template <class T, class U>
-            auto make_work_guard(const T& t, U&& u)
+            inline auto make_work_guard(const T& t, U&& u)
             {
                 return make_work_guard(get_associated_executor(t, forward<U>(u)));
             }
@@ -381,8 +385,8 @@ namespace std
                 void defer(Func&& f, const ProtoAllocator& a) const;
             };
 
-            bool operator==(const system_executor&, const system_executor&) { return true; }
-            bool operator!=(const system_executor&, const system_executor&) { return false; }
+            inline bool operator==(const system_executor&, const system_executor&) { return true; }
+            inline bool operator!=(const system_executor&, const system_executor&) { return false; }
 
             class system_context
             {
@@ -409,29 +413,178 @@ namespace std
 
             class executor
             {
+            public:
+                executor() noexcept;
+                executor(nullptr_t) noexcept;
+                executor(const executor& e) noexcept;
+                executor(executor&& e) noexcept;
+                template <class Executor>
+                executor(Executor e);
+                template <class Executor, class ProtoAllocator>
+                executor(allocator_arg_t, const ProtoAllocator& a, Executor e);
+
+                executor& operator=(const executor& e) noexcept
+                {
+                    executor(e).swap(*this);
+                    return *this;
+                }
+                executor& operator=(executor&& e) noexcept
+                {
+                    e.swap(*this);
+                    return *this;
+                }
+                executor& operator=(nullptr_t) noexcept
+                {
+                    executor(nullptr).swap(*this);
+                    return *this;
+                }
+                template <class Executor>
+                executor& operator=(Executor e)
+                {
+                    executor(std::move(e)).swap(*this);
+                    return *this;
+                }
+
+                ~executor();
+
+                void swap(executor& other) noexcept;
+                template <class Executor, class ProtoAllocator>
+                void assign(Executor e, const ProtoAllocator& a)
+                {
+                    executor(allocator_arg, a, std::move(e)).swap(*this);
+                }
+
+                execution_context& context() const noexcept;
+
+                void on_work_started() const noexcept;
+                void on_work_finished() const noexcept;
+
+                template <class Func, class ProtoAllocator>
+                void dispatch(Func&& f, const ProtoAllocator& a) const;
+                template <class Func, class ProtoAllocator>
+                void post(Func&& f, const ProtoAllocator& a) const;
+                template <class Func, class ProtoAllocator>
+                void defer(Func&& f, const ProtoAllocator& a) const;
+
+                explicit operator bool() const noexcept;
+
+                const type_info& target_type() const noexcept;
+                template <class Executor>
+                Executor* target() noexcept;
+                template <class Executor>
+                const Executor* target() const noexcept;
             };
 
             bool operator==(const executor& a, const executor& b) noexcept;
-            bool operator==(const executor& e, nullptr_t) noexcept;
-            bool operator==(nullptr_t, const executor& e) noexcept;
-            bool operator!=(const executor& a, const executor& b) noexcept;
-            bool operator!=(const executor& e, nullptr_t) noexcept;
-            bool operator!=(nullptr_t, const executor& e) noexcept;
+            inline bool operator==(const executor& e, nullptr_t) noexcept { return !e; }
+            inline bool operator==(nullptr_t, const executor& e) noexcept { return !e; }
+            inline bool operator!=(const executor& a, const executor& b) noexcept { return !(a == b); }
+            inline bool operator!=(const executor& e, nullptr_t) noexcept { return (bool)e; }
+            inline bool operator!=(nullptr_t, const executor& e) noexcept { return (bool)e; }
 
             template <class CompletionToken>
             auto dispatch(CompletionToken&& token);
             template <class Executor, class CompletionToken>
             auto dispatch(const Executor& ex, CompletionToken&& token);
-            template <class ExecutionContext, class CompletionToken>
-            auto dispatch(ExecutionContext& ctx, CompletionToken&& token);
+            template <class ExecutionContext, class CompletionToken, class = enable_if_t<is_convertible_v<ExecutionContext&, execution_context&>>>
+            inline auto dispatch(ExecutionContext& ctx, CompletionToken&& token)
+            {
+                return dispatch(ctx.get_executor(), forward<CompletionToken>(token));
+            }
+
+            template <class CompletionToken>
+            auto post(CompletionToken&& token);
+            template <class Executor, class CompletionToken>
+            auto post(const Executor& ex, CompletionToken&& token);
+            template <class ExecutionContext, class CompletionToken, class = enable_if_t<is_convertible_v<ExecutionContext&, execution_context&>>>
+            inline auto post(ExecutionContext& ctx, CompletionToken&& token)
+            {
+                return post(ctx.get_executor(), forward<CompletionToken>(token));
+            }
+
+            template <class CompletionToken>
+            auto defer(CompletionToken&& token);
+            template <class Executor, class CompletionToken>
+            auto defer(const Executor& ex, CompletionToken&& token);
+            template <class ExecutionContext, class CompletionToken, class = enable_if_t<is_convertible_v<ExecutionContext&, execution_context&>>>
+            inline auto defer(ExecutionContext& ctx, CompletionToken&& token)
+            {
+                return defer(ctx.get_executor(), forward<CompletionToken>(token));
+            }
 
             template <class Executor>
-            class strand;
+            class strand
+            {
+            public:
+                using inner_executor_type = Executor;
+
+                strand() : inner_ex_() {}
+                explicit strand(Executor ex) : inner_ex_(ex) {}
+                template <class ProtoAllocator>
+                strand(allocator_arg_t, const ProtoAllocator& alloc, Executor ex);
+                strand(const strand& other) noexcept : inner_ex_(other.inner_ex_) {}
+                strand(strand&& other) noexcept : inner_ex_(move(other.inner_ex_)) {}
+                template <class OtherExecutor>
+                strand(const strand<OtherExecutor>& other) noexcept : inner_ex_(other.inner_ex_)
+                {
+                }
+                template <class OtherExecutor>
+                strand(strand<OtherExecutor>&& other) noexcept : inner_ex_(move(other.inner_ex_))
+                {
+                }
+
+                strand& operator=(const strand& other) noexcept
+                {
+                    inner_ex_ = other.inner_ex_;
+                    return *this;
+                }
+                strand& operator=(strand&& other) noexcept
+                {
+                    inner_ex_ = move(other.inner_ex_);
+                    return *this;
+                }
+                template <class OtherExecutor>
+                strand& operator=(const strand<OtherExecutor>& other) noexcept
+                {
+                    inner_ex_ = other.inner_ex_;
+                    return *this;
+                }
+                template <class OtherExecutor>
+                strand& operator=(strand<OtherExecutor>&& other) noexcept
+                {
+                    inner_ex_ = move(other.inner_ex_);
+                    return *this;
+                }
+
+                ~strand();
+
+                inner_executor_type get_inner_executor() const noexcept { return inner_ex_; }
+
+                bool running_in_this_thread() const noexcept;
+
+                execution_context& context() const noexcept { return inner_ex_.context(); }
+
+                void on_work_started() const noexcept { inner_ex_.on_work_started(); }
+                void on_work_finished() const noexcept { inner_ex_.on_work_finished(); }
+
+                template <class Func, class ProtoAllocator>
+                void dispatch(Func&& f, const ProtoAllocator& a) const;
+                template <class Func, class ProtoAllocator>
+                void post(Func&& f, const ProtoAllocator& a) const;
+                template <class Func, class ProtoAllocator>
+                void defer(Func&& f, const ProtoAllocator& a) const;
+
+            private:
+                Executor inner_ex_; // exposition only
+            };
 
             template <class Executor>
             bool operator==(const strand<Executor>& a, const strand<Executor>& b);
             template <class Executor>
-            bool operator!=(const strand<Executor>& a, const strand<Executor>& b);
+            inline bool operator!=(const strand<Executor>& a, const strand<Executor>& b)
+            {
+                return !(a == b);
+            }
 
             template <class ProtoAllocator = allocator<void>>
             class use_future_t
@@ -456,17 +609,245 @@ namespace std
 
             constexpr use_future_t<> use_future{};
 
+            template <typename T, typename F>
+            class _Promise_invoker
+            {
+            public:
+                _Promise_invoker(const shared_ptr<promise<T>>& p, F&& f) : p_(p), f_(forward<F>(f)) {}
+
+                void operator()()
+                {
+                    try
+                    {
+                        f_();
+                    }
+                    catch (...)
+                    {
+                        p_->set_exception(current_exception());
+                    }
+                }
+
+            private:
+                shared_ptr<promise<T>> p_;
+                decay_t<F> f_;
+            };
+
+            template <typename T>
+            class _Promise_executor
+            {
+            public:
+                explicit _Promise_executor(const shared_ptr<promise<T>>& p) : p_(p) {}
+                execution_context& context() const noexcept { return system_executor().context(); }
+
+                void on_work_started() const noexcept {}
+                void on_work_finished() const noexcept {}
+
+                template <typename F, typename A>
+                void dispatch(F&& f, const A&) const
+                {
+                    _Promise_invoker<T, F>(p_, forward<F>(f))();
+                }
+                template <typename F, typename A>
+                void post(F&& f, const A& a) const
+                {
+                    system_executor().post(_Promise_invoker<T, F>(p_, forward<F>(f)), a);
+                }
+                template <typename F, typename A>
+                void defer(F&& f, const A& a) const
+                {
+                    system_executor().defer(_Promise_invoker<T, F>(p_, forward<F>(f)), a);
+                }
+
+                friend bool operator==(const _Promise_executor& a, const _Promise_executor& b) noexcept { return a.p_ == b.p_; }
+                friend bool operator!=(const _Promise_executor& a, const _Promise_executor& b) noexcept { return a.p_ != b.p_; }
+
+            private:
+                shared_ptr<promise<T>> p_;
+            };
+
+            template <typename T>
+            class _Promise_creator
+            {
+            public:
+                using executor_type = _Promise_executor<T>;
+                using future_type = future<T>;
+
+                executor_type get_executor() const noexcept { return executor_type(p_); }
+                future_type get_future() { return p_->get_future(); }
+
+            protected:
+                template <typename Allocator>
+                void create_promise(const Allocator& a)
+                {
+                    typename allocator_traits<Allocator>::template rebind_alloc<char> b(a);
+                    p_ = allocate_shared<promise<T>>(b, allocator_arg, b);
+                }
+
+                shared_ptr<promise<T>> p_;
+            };
+
+            template <typename>
+            struct _Promise_handler_selector;
+
+            template <>
+            struct _Promise_handler_selector<void()> : _Promise_creator<void>
+            {
+                void operator()() { this->p_->set_value(); }
+            };
+
+            template <>
+            struct _Promise_handler_selector<void(error_code)> : _Promise_creator<void>
+            {
+                void operator()(const error_code& ec)
+                {
+                    if (ec)
+                    {
+                        this->p_->set_exception(make_exception_ptr(system_error(ec)));
+                    }
+                    else
+                    {
+                        this->p_->set_value();
+                    }
+                }
+            };
+
+            template <>
+            struct _Promise_handler_selector<void(exception_ptr)> : _Promise_creator<void>
+            {
+                void operator()(const exception_ptr& ex)
+                {
+                    if (ex)
+                    {
+                        this->p_->set_exception(ex);
+                    }
+                    else
+                    {
+                        this->p_->set_value();
+                    }
+                }
+            };
+
+            template <typename T>
+            struct _Promise_handler_selector<void(T)> : _Promise_creator<T>
+            {
+                template <typename Arg>
+                void operator()(Arg&& arg)
+                {
+                    this->p_->set_value(forward<Arg>(arg));
+                }
+            };
+
+            template <typename T>
+            struct _Promise_handler_selector<void(error_code, T)> : _Promise_creator<T>
+            {
+                template <typename Arg>
+                void operator()(const error_code& ec, Arg&& arg)
+                {
+                    if (ec)
+                    {
+                        this->p_->set_exception(make_exception_ptr(system_error(ec)));
+                    }
+                    else
+                    {
+                        this->p_->set_value(forward<Arg>(arg));
+                    }
+                }
+            };
+
+            template <typename T>
+            struct _Promise_handler_selector<void(exception_ptr, T)> : _Promise_creator<T>
+            {
+                template <typename Arg>
+                void operator()(const exception_ptr& ex, Arg&& arg)
+                {
+                    if (ex)
+                    {
+                        this->p_->set_exception(ex);
+                    }
+                    else
+                    {
+                        this->p_->set_value(forward<Arg>(arg));
+                    }
+                }
+            };
+
+            template <typename... Ts>
+            struct _Promise_handler_selector<void(Ts...)> : _Promise_creator<tuple<Ts...>>
+            {
+                template <typename... Args>
+                void operator()(Args&&... args)
+                {
+                    this->p_->set_value(forward_as_tuple(forward<Args>(args)...));
+                }
+            };
+
+            template <typename... Ts>
+            struct _Promise_handler_selector<void(error_code, Ts...)> : _Promise_creator<tuple<Ts...>>
+            {
+                template <typename... Args>
+                void operator()(const error_code& ec, Args&&... args)
+                {
+                    if (ec)
+                    {
+                        this->p_->set_exception(make_exception_ptr(system_error(ec)));
+                    }
+                    else
+                    {
+                        this->p_->set_value(forward_as_tuple(forward<Args>(args)...));
+                    }
+                }
+            };
+
+            template <typename... Ts>
+            struct _Promise_handler_selector<void(exception_ptr, Ts...)> : _Promise_creator<tuple<Ts...>>
+            {
+                template <typename... Args>
+                void operator()(const exception_ptr& ex, Args&&... args)
+                {
+                    if (ex)
+                    {
+                        this->p_->set_exception(ex);
+                    }
+                    else
+                    {
+                        this->p_->set_value(forward_as_tuple(forward<Args>(args)...));
+                    }
+                }
+            };
+
+            template <typename Signature, typename Allocator>
+            class _Promise_handler : public _Promise_handler_selector<Signature>
+            {
+            public:
+                using allocator_type = Allocator;
+                using result_type = void;
+
+                _Promise_handler(use_future_t<Allocator> u) : allocator_(u.get_allocator())
+                {
+                    this->create_promise(allocator_);
+                }
+
+                allocator_type get_allocator() const noexcept { return allocator_; }
+
+            private:
+                Allocator allocator_;
+            };
+
             template <class ProtoAllocator, class Result, class... Args>
             class async_result<use_future_t<ProtoAllocator>, Result(Args...)>
             {
-                // using completion_handler_type = see below;
-                // using return_type = see below;
+            public:
+                using completion_handler_type = _Promise_handler<void(decay_t<Args>...), ProtoAllocator>;
+                using return_type = typename completion_handler_type::future_type;
 
-                explicit async_result(completion_handler_type& h);
+                explicit async_result(completion_handler_type& h) : future_(h.get_future()) {}
                 async_result(const async_result&) = delete;
                 async_result& operator=(const async_result&) = delete;
 
-                return_type get();
+                return_type get() { return move(future_); }
+
+            private:
+                return_type future_;
             };
 
             template <class Result, class... Args, class Signature>
