@@ -514,7 +514,7 @@ namespace std
                 template <class Func, class ProtoAllocator>
                 void post(Func&& f, const ProtoAllocator& a) const
                 {
-                    typename allocator_traits<Allocator>::template rebind_alloc<char> b{ a };
+                    typename allocator_traits<Allocator>::template rebind_alloc<decay_t<Func>> b{ a };
                     function<void()> tmp{ allocator_arg, b, forward<Func>(f) };
                     context().pool_.post(move(tmp));
                 }
@@ -532,19 +532,57 @@ namespace std
             {
             public:
                 bad_executor() noexcept : exception() {}
+                const char* what() const noexcept override { return "Bad executor."; }
+            };
+
+            class _Executor_impl_base
+            {
+            public:
+                virtual execution_context& context() const noexcept = 0;
+                virtual void on_work_started() const noexcept = 0;
+                virtual void on_work_finished() const noexcept = 0;
+                virtual void dispatch(function<void()>&& f) const = 0;
+                virtual void post(function<void()>&& f) const = 0;
+                virtual void defer(function<void()>&& f) const = 0;
+                virtual const type_info& target_type() const noexcept = 0;
+            };
+
+            template <class Executor, class ProtoAllocator>
+            class _Executor_impl : public _Executor_impl_base
+            {
+            public:
+                _Executor_impl(Executor e, const ProtoAllocator& alloc = {}) : executor_(move(e)), alloc_(alloc) {}
+
+                execution_context& context() const noexcept override { return executor_.context(); }
+                void on_work_started() const noexcept override { executor_.on_work_started(); }
+                void on_work_finished() const noexcept override { executor_.on_work_finished(); }
+                void dispatch(function<void()>&& f) const override { executor_.dispatch(move(f), alloc_); }
+                void post(function<void()>&& f) const override { executor_.post(move(f), alloc_); }
+                void defer(function<void()>&& f) const override { executor_.defer(move(f), alloc_); }
+                const type_info& target_type() const noexcept override { return typeid(Executor); }
+
+            private:
+                Executor executor_;
+                ProtoAllocator alloc_;
             };
 
             class executor
             {
             public:
-                executor() noexcept;
-                executor(nullptr_t) noexcept;
-                executor(const executor& e) noexcept;
-                executor(executor&& e) noexcept;
+                executor() noexcept : impl_(nullptr) {}
+                executor(nullptr_t) noexcept : impl_(nullptr) {}
+                executor(const executor& e) noexcept : impl_(e.impl_) {}
+                executor(executor&& e) noexcept : impl_(move(e.impl_)) {}
                 template <class Executor>
-                executor(Executor e);
+                executor(Executor e) : impl_(make_shared<_Executor_impl<Executor, allocator<Executor>>>(move(e)))
+                {
+                }
                 template <class Executor, class ProtoAllocator>
-                executor(allocator_arg_t, const ProtoAllocator& a, Executor e);
+                executor(allocator_arg_t, const ProtoAllocator& a, Executor e)
+                {
+                    typename allocator_traits<Allocator>::template rebind_alloc<char> b{ a };
+                    impl_ = allocate_shared<_Executor_impl<Executor, ProtoAllocator>>(b, move(e), a);
+                }
 
                 executor& operator=(const executor& e) noexcept
                 {
@@ -570,35 +608,67 @@ namespace std
 
                 ~executor();
 
-                void swap(executor& other) noexcept;
+                void swap(executor& other) noexcept { impl_.swap(other.impl_); }
                 template <class Executor, class ProtoAllocator>
                 void assign(Executor e, const ProtoAllocator& a)
                 {
                     executor(allocator_arg, a, std::move(e)).swap(*this);
                 }
 
-                execution_context& context() const noexcept;
+                execution_context& context() const noexcept { return impl_->context(); }
 
-                void on_work_started() const noexcept;
-                void on_work_finished() const noexcept;
+                void on_work_started() const noexcept { impl_->on_work_started(); }
+                void on_work_finished() const noexcept { impl_->on_work_finished(); }
 
                 template <class Func, class ProtoAllocator>
-                void dispatch(Func&& f, const ProtoAllocator& a) const;
+                void dispatch(Func&& f, const ProtoAllocator& a) const
+                {
+                    typename allocator_traits<Allocator>::template rebind_alloc<decay_t<Func>> b{ a };
+                    function<void()> tmp{ allocator_arg, b, forward<Func>(f) };
+                    impl_->dispatch(move(tmp));
+                }
                 template <class Func, class ProtoAllocator>
-                void post(Func&& f, const ProtoAllocator& a) const;
+                void post(Func&& f, const ProtoAllocator& a) const
+                {
+                    typename allocator_traits<Allocator>::template rebind_alloc<decay_t<Func>> b{ a };
+                    function<void()> tmp{ allocator_arg, b, forward<Func>(f) };
+                    impl_->post(move(tmp));
+                }
                 template <class Func, class ProtoAllocator>
-                void defer(Func&& f, const ProtoAllocator& a) const;
+                void defer(Func&& f, const ProtoAllocator& a) const
+                {
+                    typename allocator_traits<Allocator>::template rebind_alloc<decay_t<Func>> b{ a };
+                    function<void()> tmp{ allocator_arg, b, forward<Func>(f) };
+                    impl_->defer(move(tmp));
+                }
 
-                explicit operator bool() const noexcept;
+                explicit operator bool() const noexcept { return (bool)impl_; }
 
-                const type_info& target_type() const noexcept;
+                const type_info& target_type() const noexcept { return impl_->target_type(); }
                 template <class Executor>
-                Executor* target() noexcept;
+                Executor* target() noexcept
+                {
+                    if (target_type() == typeid(Executor))
+                        return impl_.get();
+                    else
+                        return nullptr;
+                }
                 template <class Executor>
-                const Executor* target() const noexcept;
+                const Executor* target() const noexcept
+                {
+                    if (target_type() == typeid(Executor))
+                        return impl_.get();
+                    else
+                        return nullptr;
+                }
+
+            private:
+                shared_ptr<_Executor_impl_base> impl_;
+
+                friend bool operator==(const executor&, const executor&) noexcept;
             };
 
-            bool operator==(const executor& a, const executor& b) noexcept;
+            inline bool operator==(const executor& a, const executor& b) noexcept { return a.impl_ == b.impl_; }
             inline bool operator==(const executor& e, nullptr_t) noexcept { return !e; }
             inline bool operator==(nullptr_t, const executor& e) noexcept { return !e; }
             inline bool operator!=(const executor& a, const executor& b) noexcept { return !(a == b); }
@@ -749,7 +819,7 @@ namespace std
                 void defer(Func&& f, const ProtoAllocator& a) const;
 
             private:
-                Executor inner_ex_; // exposition only
+                Executor inner_ex_;
             };
 
             template <class Executor>
