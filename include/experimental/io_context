@@ -1,0 +1,101 @@
+#ifndef NET_IO_CONTEXT
+#define NET_IO_CONTEXT
+
+#include <chrono>
+#include <experimental/executor>
+
+namespace std::experimental::net
+{
+inline namespace v1
+{
+class io_context : public execution_context
+{
+public:
+    class executor_type
+    {
+    public:
+        executor_type(const executor_type& other) noexcept;
+        executor_type(executor_type&& other) noexcept;
+
+        executor_type& operator=(const executor_type& other) noexcept;
+        executor_type& operator=(executor_type&& other) noexcept;
+
+        bool running_in_this_thread() const noexcept;
+
+        io_context& context() const noexcept;
+
+        void on_work_started() const noexcept;
+        void on_work_finished() const noexcept;
+
+        template <class Func, class ProtoAllocator>
+        void dispatch(Func&& f, const ProtoAllocator& a) const;
+        template <class Func, class ProtoAllocator>
+        void post(Func&& f, const ProtoAllocator& a) const;
+        template <class Func, class ProtoAllocator>
+        void defer(Func&& f, const ProtoAllocator& a) const;
+
+        friend inline bool operator==(const executor_type& a, const executor_type& b) { return addressof(a.context()) == addressof(b.context()); }
+        friend inline bool operator!=(const executor_type& a, const executor_type& b) { return !(a == b); }
+    };
+    using count_type = size_t;
+
+    io_context();
+    explicit io_context(int concurrency_hint);
+    io_context(const io_context&) = delete;
+    io_context& operator=(const io_context&) = delete;
+
+    executor_type get_executor() noexcept;
+
+    count_type run_one();
+    template <class Clock, class Duration>
+    count_type run_one_until(const chrono::time_point<Clock, Duration>& abs_time);
+    template <class Rep, class Period>
+    count_type run_one_for(const chrono::duration<Rep, Period>& rel_time)
+    {
+        return run_one_until(chrono::steady_clock::now() + rel_time);
+    }
+
+    count_type run()
+    {
+        count_type n{ 0 };
+        while (run_one())
+            if (n != numeric_limits<count_type>::max())
+                ++n;
+        return n;
+    }
+    template <class Clock, class Duration>
+    count_type run_until(const chrono::time_point<Clock, Duration>& abs_time)
+    {
+        count_type n{ 0 };
+        while (run_one_until(abs_time))
+            if (n != numeric_limits<count_type>::max())
+                ++n;
+        return n;
+    }
+    template <class Rep, class Period>
+    count_type run_for(const chrono::duration<Rep, Period>& rel_time)
+    {
+        return run_until(chrono::steady_clock::now() + rel_time);
+    }
+
+    count_type poll()
+    {
+        count_type n{ 0 };
+        while (poll_one())
+            if (n != numeric_limits<count_type>::max())
+                ++n;
+        return n;
+    }
+
+    count_type poll_one();
+
+    void stop();
+
+    bool stopped() const noexcept;
+
+    void restart();
+};
+} // namespace v1
+} // namespace std::experimental::net
+
+#endif

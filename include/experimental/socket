@@ -1,0 +1,81 @@
+#ifndef NET_SOCKET
+#define NET_SOCKET
+
+#include <experimental/timer>
+#include <system_error>
+#include <type_traits>
+
+namespace std
+{
+namespace experimental::net
+{
+inline namespace v1
+{
+enum class socket_errc
+{
+    already_open = 1,
+    not_found = 3
+};
+
+const error_category& socket_category() noexcept;
+
+error_code make_error_code(socket_errc e) noexcept;
+error_condition make_error_condition(socket_errc e) noexcept;
+
+class socket_base;
+
+template <class Protocol>
+class basic_socket;
+
+template <class Protocol>
+class basic_datagram_socket;
+
+template <class Protocol>
+class basic_stream_socket;
+
+template <class Protocol>
+class basic_socket_acceptor;
+
+template <class Protocol, class Clock = chrono::steady_clock, class WaitTraits = wait_traits<Clock>>
+class basic_socket_streambuf;
+
+template <class Protocol, class Clock = chrono::steady_clock, class WaitTraits = wait_traits<Clock>>
+class basic_socket_iostream;
+
+template <class Protocol, class EndpointSequence>
+typename Protocol::endpoint connect(basic_socket<Protocol>& s, const EndpointSequence& endpoints);
+template <class Protocol, class EndpointSequence>
+typename Protocol::endpoint connect(basic_socket<Protocol>& s, const EndpointSequence& endpoints, error_code& ec);
+template <class Protocol, class EndpointSequence, class ConnectCondition>
+typename Protocol::endpoint connect(basic_socket<Protocol>& s, const EndpointSequence& endpoints, ConnectCondition c);
+template <class Protocol, class EndpointSequence, class ConnectCondition>
+typename Protocol::endpoint connect(basic_socket<Protocol>& s, const EndpointSequence& endpoints, ConnectCondition c, error_code& ec);
+
+template <class Protocol, class InputIterator>
+InputIterator connect(basic_socket<Protocol>& s, InputIterator first, InputIterator last);
+template <class Protocol, class InputIterator>
+InputIterator connect(basic_socket<Protocol>& s, InputIterator first, InputIterator last, error_code& ec);
+template <class Protocol, class InputIterator, class ConnectCondition>
+InputIterator connect(basic_socket<Protocol>& s, InputIterator first, InputIterator last, ConnectCondition c);
+template <class Protocol, class InputIterator, class ConnectCondition>
+InputIterator connect(basic_socket<Protocol>& s, InputIterator first, InputIterator last, ConnectCondition c, error_code& ec);
+
+template <class Protocol, class EndpointSequence, class CompletionToken>
+auto async_connect(basic_socket<Protocol>& s, const EndpointSequence& endpoints, CompletionToken&& token);
+template <class Protocol, class EndpointSequence, class ConnectCondition, class CompletionToken>
+auto async_connect(basic_socket<Protocol>& s, const EndpointSequence& endpoints, ConnectCondition c, CompletionToken&& token);
+
+template <class Protocol, class InputIterator, class CompletionToken>
+auto async_connect(basic_socket<Protocol>& s, InputIterator first, InputIterator last, CompletionToken&& token);
+template <class Protocol, class InputIterator, class ConnectCondition, class CompletionToken>
+auto async_connect(basic_socket<Protocol>& s, InputIterator first, InputIterator last, ConnectCondition c, CompletionToken&& token);
+
+} // namespace v1
+} // namespace experimental::net
+template <>
+struct is_error_code_enum<experimental::net::v1::socket_errc> : public true_type
+{
+};
+} // namespace std
+
+#endif

@@ -1,0 +1,16 @@
+#ifndef NET_NET
+#define NET_NET
+
+#include <experimental/executor>
+
+#include <experimental/io_context>
+
+#include <experimental/timer>
+
+#include <experimental/buffer>
+
+#include <experimental/socket>
+
+#include <experimental/internet>
+
+#endif

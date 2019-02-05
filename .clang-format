@@ -15,7 +15,6 @@ BreakConstructorInitializersBeforeComma: false
 ColumnLimit: 0
 Cpp11BracedListStyle: false
 IndentWidth: 4
-NamespaceIndentation: All
 PointerBindsToType: true
 TabWidth: 4
 UseTab: Never

@@ -1,0 +1,331 @@
+#ifndef NET_INTERNET
+#define NET_INTERNET
+
+#include <array>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <type_traits>
+
+namespace std
+{
+namespace experimental::net
+{
+inline namespace v1
+{
+namespace ip
+{
+enum class resolver_errc
+{
+    host_not_found = -2, // EAI_NONAME
+    try_again = -3, // EAI_AGAIN
+    service_not_found = -8 // EAI_SERVICE
+};
+
+const error_category& resolver_category() noexcept;
+
+error_code make_error_code(resolver_errc e) noexcept;
+error_condition make_error_condition(resolver_errc e) noexcept;
+
+using port_type = uint_least16_t;
+using scope_id_type = uint_least32_t;
+
+struct v4_mapped_t
+{
+};
+constexpr v4_mapped_t v4_mapped{};
+
+class address
+{
+public:
+    constexpr address() noexcept;
+    constexpr address(const address& a) noexcept;
+    constexpr address(const address_v4& a) noexcept;
+    constexpr address(const address_v6& a) noexcept;
+
+    address& operator=(const address& a) noexcept;
+    address& operator=(const address_v4& a) noexcept;
+    address& operator=(const address_v6& a) noexcept;
+
+    constexpr bool is_v4() const noexcept;
+    constexpr bool is_v6() const noexcept;
+    constexpr address_v4 to_v4() const;
+    constexpr address_v6 to_v6() const;
+    constexpr bool is_unspecified() const noexcept;
+    constexpr bool is_loopback() const noexcept;
+    constexpr bool is_multicast() const noexcept;
+    template <class Allocator = allocator<char>>
+    basic_string<char, char_traits<char>, Allocator> to_string(const Allocator& a = Allocator()) const;
+
+private:
+    address_v4 v4_;
+    address_v6 v6_;
+};
+class address_v4
+{
+public:
+    using uint_type = uint_least32_t;
+    struct bytes_type : array<unsigned char, 4>
+    {
+        template <class... T>
+        explicit constexpr bytes_type(T... t) : array<unsigned char, 4>{ static_cast<unsigned char>(t)... }
+        {
+        }
+    };
+
+    constexpr address_v4() noexcept;
+    constexpr address_v4(const address_v4& a) noexcept;
+    constexpr address_v4(const bytes_type& bytes);
+    explicit constexpr address_v4(uint_type val);
+
+    address_v4& operator=(const address_v4& a) noexcept;
+
+    constexpr bool is_unspecified() const noexcept;
+    constexpr bool is_loopback() const noexcept;
+    constexpr bool is_multicast() const noexcept;
+    constexpr bytes_type to_bytes() const noexcept;
+    constexpr uint_type to_uint() const noexcept;
+    template <class Allocator = allocator<char>>
+    basic_string<char, char_traits<char>, Allocator> to_string(const Allocator& a = Allocator()) const;
+
+    static constexpr address_v4 any() noexcept;
+    static constexpr address_v4 loopback() noexcept;
+    static constexpr address_v4 broadcast() noexcept;
+};
+class address_v6
+{
+public:
+    struct bytes_type : array<unsigned char, 16>
+    {
+        template <class... T>
+        explicit constexpr bytes_type(T... t) : array<unsigned char, 16>{ static_cast<unsigned char>(t)... }
+        {
+        }
+    };
+    constexpr address_v6() noexcept;
+    constexpr address_v6(const address_v6& a) noexcept;
+    constexpr address_v6(const bytes_type& bytes, scope_id_type scope = 0);
+
+    address_v6& operator=(const address_v6& a) noexcept;
+
+    void scope_id(scope_id_type id) noexcept;
+    constexpr scope_id_type scope_id() const noexcept;
+    constexpr bool is_unspecified() const noexcept;
+    constexpr bool is_loopback() const noexcept;
+    constexpr bool is_multicast() const noexcept;
+    constexpr bool is_link_local() const noexcept;
+    constexpr bool is_site_local() const noexcept;
+    constexpr bool is_v4_mapped() const noexcept;
+    constexpr bool is_multicast_node_local() const noexcept;
+    constexpr bool is_multicast_link_local() const noexcept;
+    constexpr bool is_multicast_site_local() const noexcept;
+    constexpr bool is_multicast_org_local() const noexcept;
+    constexpr bool is_multicast_global() const noexcept;
+    constexpr bytes_type to_bytes() const noexcept;
+    template <class Allocator = allocator<char>>
+    basic_string<char, char_traits<char>, Allocator> to_string(const Allocator& a = Allocator()) const;
+
+    static constexpr address_v6 any() noexcept;
+    static constexpr address_v6 loopback() noexcept;
+};
+
+struct bad_address_cast : bad_cast
+{
+    bad_address_cast() noexcept : bad_cast() {}
+};
+
+constexpr bool operator==(const address&, const address&) noexcept;
+constexpr bool operator!=(const address&, const address&) noexcept;
+constexpr bool operator<(const address&, const address&) noexcept;
+constexpr bool operator>(const address&, const address&) noexcept;
+constexpr bool operator<=(const address&, const address&) noexcept;
+constexpr bool operator>=(const address&, const address&) noexcept;
+
+constexpr bool operator==(const address_v4&, const address_v4&) noexcept;
+constexpr bool operator!=(const address_v4&, const address_v4&) noexcept;
+constexpr bool operator<(const address_v4&, const address_v4&) noexcept;
+constexpr bool operator>(const address_v4&, const address_v4&) noexcept;
+constexpr bool operator<=(const address_v4&, const address_v4&) noexcept;
+constexpr bool operator>=(const address_v4&, const address_v4&) noexcept;
+
+constexpr bool operator==(const address_v6&, const address_v6&) noexcept;
+constexpr bool operator!=(const address_v6&, const address_v6&) noexcept;
+constexpr bool operator<(const address_v6&, const address_v6&) noexcept;
+constexpr bool operator>(const address_v6&, const address_v6&) noexcept;
+constexpr bool operator<=(const address_v6&, const address_v6&) noexcept;
+constexpr bool operator>=(const address_v6&, const address_v6&) noexcept;
+
+address make_address(const char*);
+address make_address(const char*, error_code&) noexcept;
+address make_address(const string&);
+address make_address(const string&, error_code&) noexcept;
+address make_address(string_view);
+address make_address(string_view, error_code&) noexcept;
+
+constexpr address_v4 make_address_v4(const address_v4::bytes_type&);
+constexpr address_v4 make_address_v4(address_v4::uint_type);
+constexpr address_v4 make_address_v4(v4_mapped_t, const address_v6&);
+address_v4 make_address_v4(const char*);
+address_v4 make_address_v4(const char*, error_code&) noexcept;
+address_v4 make_address_v4(const string&);
+address_v4 make_address_v4(const string&, error_code&) noexcept;
+address_v4 make_address_v4(string_view);
+address_v4 make_address_v4(string_view, error_code&) noexcept;
+
+constexpr address_v6 make_address_v6(const address_v6::bytes_type&, scope_id_type = 0);
+constexpr address_v6 make_address_v6(v4_mapped_t, const address_v4&) noexcept;
+address_v6 make_address_v6(const char*);
+address_v6 make_address_v6(const char*, error_code&) noexcept;
+address_v6 make_address_v6(const string&);
+address_v6 make_address_v6(const string&, error_code&) noexcept;
+address_v6 make_address_v6(string_view);
+address_v6 make_address_v6(string_view, error_code&) noexcept;
+
+template <class CharT, class Traits>
+basic_ostream<CharT, Traits>& operator<<(basic_ostream<CharT, Traits>&, const address&);
+template <class CharT, class Traits>
+basic_ostream<CharT, Traits>& operator<<(basic_ostream<CharT, Traits>&, const address_v4&);
+template <class CharT, class Traits>
+basic_ostream<CharT, Traits>& operator<<(basic_ostream<CharT, Traits>&, const address_v6&);
+
+template <class>
+class basic_address_iterator;
+template <>
+class basic_address_iterator<address_v4>;
+using address_v4_iterator = basic_address_iterator<address_v4>;
+template <>
+class basic_address_iterator<address_v6>;
+using address_v6_iterator = basic_address_iterator<address_v6>;
+
+template <class>
+class basic_address_range;
+template <>
+class basic_address_range<address_v4>;
+using address_v4_range = basic_address_range<address_v4>;
+template <>
+class basic_address_range<address_v6>;
+using address_v6_range = basic_address_range<address_v6>;
+
+class network_v4;
+class network_v6;
+
+bool operator==(const network_v4&, const network_v4&) noexcept;
+bool operator!=(const network_v4&, const network_v4&) noexcept;
+
+bool operator==(const network_v6&, const network_v6&) noexcept;
+bool operator!=(const network_v6&, const network_v6&) noexcept;
+
+network_v4 make_network_v4(const address_v4&, int);
+network_v4 make_network_v4(const address_v4&, const address_v4&);
+network_v4 make_network_v4(const char*);
+network_v4 make_network_v4(const char*, error_code&) noexcept;
+network_v4 make_network_v4(const string&);
+network_v4 make_network_v4(const string&, error_code&) noexcept;
+network_v4 make_network_v4(string_view);
+network_v4 make_network_v4(string_view, error_code&) noexcept;
+
+network_v6 make_network_v6(const address_v6&, int);
+network_v6 make_network_v6(const char*);
+network_v6 make_network_v6(const char*, error_code&) noexcept;
+network_v6 make_network_v6(const string&);
+network_v6 make_network_v6(const string&, error_code&) noexcept;
+network_v6 make_network_v6(string_view);
+network_v6 make_network_v6(string_view, error_code&) noexcept;
+
+template <class CharT, class Traits>
+basic_ostream<CharT, Traits>& operator<<(basic_ostream<CharT, Traits>&, const network_v4&);
+
+template <class CharT, class Traits>
+basic_ostream<CharT, Traits>& operator<<(basic_ostream<CharT, Traits>&, const network_v6&);
+
+template <class InternetProtocol>
+class basic_endpoint;
+
+template <class InternetProtocol>
+bool operator==(const basic_endpoint<InternetProtocol>&, const basic_endpoint<InternetProtocol>&);
+template <class InternetProtocol>
+bool operator!=(const basic_endpoint<InternetProtocol>&, const basic_endpoint<InternetProtocol>&);
+template <class InternetProtocol>
+bool operator<(const basic_endpoint<InternetProtocol>&, const basic_endpoint<InternetProtocol>&);
+template <class InternetProtocol>
+bool operator>(const basic_endpoint<InternetProtocol>&, const basic_endpoint<InternetProtocol>&);
+template <class InternetProtocol>
+bool operator<=(const basic_endpoint<InternetProtocol>&, const basic_endpoint<InternetProtocol>&);
+template <class InternetProtocol>
+bool operator>=(const basic_endpoint<InternetProtocol>&, const basic_endpoint<InternetProtocol>&);
+
+template <class CharT, class Traits, class InternetProtocol>
+basic_ostream<CharT, Traits>& operator<<(basic_ostream<CharT, Traits>&, const basic_endpoint<InternetProtocol>&);
+
+template <class InternetProtocol>
+class basic_resolver_entry;
+
+template <class InternetProtocol>
+bool operator==(const basic_resolver_entry<InternetProtocol>&, const basic_resolver_entry<InternetProtocol>&);
+template <class InternetProtocol>
+bool operator!=(const basic_resolver_entry<InternetProtocol>&, const basic_resolver_entry<InternetProtocol>&);
+
+template <class InternetProtocol>
+class basic_resolver_results;
+
+template <class InternetProtocol>
+bool operator==(const basic_resolver_results<InternetProtocol>&, const basic_resolver_results<InternetProtocol>&);
+template <class InternetProtocol>
+bool operator!=(const basic_resolver_results<InternetProtocol>&, const basic_resolver_results<InternetProtocol>&);
+
+class resolver_base;
+
+template <class InternetProtocol>
+class basic_resolver;
+
+string host_name();
+string host_name(error_code&);
+template <class Allocator>
+basic_string<char, char_traits<char>, Allocator> host_name(const Allocator&);
+template <class Allocator>
+basic_string<char, char_traits<char>, Allocator> host_name(const Allocator&, error_code&);
+
+class tcp;
+
+bool operator==(const tcp& a, const tcp& b);
+bool operator!=(const tcp& a, const tcp& b);
+
+class udp;
+
+bool operator==(const udp& a, const udp& b);
+bool operator!=(const udp& a, const udp& b);
+
+class v6_only;
+
+namespace unicast
+{
+class hops;
+}
+
+namespace multicast
+{
+class join_group;
+class leave_group;
+class outbound_interface;
+class hops;
+class enable_loopback;
+} // namespace multicast
+} // namespace ip
+} // namespace v1
+} // namespace experimental::net
+template <>
+struct is_error_condition_enum<experimental::net::v1::ip::resolver_errc> : public true_type
+{
+};
+
+template <class T>
+struct hash;
+template <>
+struct hash<experimental::net::v1::ip::address>;
+template <>
+struct hash<experimental::net::v1::ip::address_v4>;
+template <>
+struct hash<experimental::net::v1::ip::address_v6>;
+} // namespace std
+
+#endif
