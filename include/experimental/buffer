@@ -20,20 +20,115 @@ enum class stream_errc
     not_found = 3
 };
 
-const error_category& stream_category() noexcept;
+struct _Stream_category : error_category
+{
+    const char* name() const noexcept override { return "stream"; }
+    string message(int value) const override
+    {
+        switch (value)
+        {
+        case static_cast<int>(stream_errc::eof):
+            return "End of file";
+        case static_cast<int>(stream_errc::not_found):
+            return "Element not found";
+        default:
+            return "stream error";
+        }
+    }
+};
 
-error_code make_error_code(stream_errc e) noexcept;
-error_condition make_error_condition(stream_errc e) noexcept;
+inline const error_category& stream_category() noexcept
+{
+    static _Stream_category instance{};
+    return instance;
+}
 
-class mutable_buffer;
-class const_buffer;
+inline error_code make_error_code(stream_errc e) noexcept { return error_code(static_cast<int>(e), stream_category()); }
+inline error_condition make_error_condition(stream_errc e) noexcept { return error_condition(static_cast<int>(e), stream_category()); }
 
-template <class T>
-struct is_mutable_buffer_sequence;
-template <class T>
-struct is_const_buffer_sequence;
-template <class T>
-struct is_dynamic_buffer;
+class mutable_buffer
+{
+public:
+    mutable_buffer() noexcept : data_(nullptr), size_(0) {}
+    mutable_buffer(void* p, size_t n) noexcept : data_(p), size_(n) {}
+
+    void* data() const noexcept { return data_; }
+    size_t size() const noexcept { return size_; }
+    mutable_buffer& operator+=(size_t n) noexcept
+    {
+        n = n < size_ ? n : size_;
+        data_ = static_cast<char*>(data_) + n;
+        size_ -= n;
+        return *this;
+    }
+
+private:
+    void* data_;
+    size_t size_;
+
+    friend class const_buffer;
+};
+class const_buffer
+{
+public:
+    const_buffer() noexcept : data_(nullptr), size_(0) {}
+    const_buffer(const void* p, size_t n) noexcept : data_(p), size_(n) {}
+    const_buffer(const mutable_buffer& b) noexcept : data_(b.data_), size_(b.size_) {}
+
+    const void* data() const noexcept { return data_; }
+    size_t size() const noexcept { return size_; }
+    const_buffer& operator+=(size_t n) noexcept
+    {
+        n = n < size_ ? n : size_;
+        data_ = static_cast<const char*>(data_) + n;
+        size_ -= n;
+        return *this;
+    }
+
+private:
+    const void* data_;
+    size_t size_;
+};
+
+template <class T, class = void, class = void>
+struct is_mutable_buffer_sequence : false_type
+{
+};
+template <class T,
+          class = void_t<decltype(buffer_sequence_begin(declval<T>()))>,
+          class = void_t<decltype(buffer_sequence_end(declval<T>()))>>
+struct is_mutable_buffer_sequence : true_type
+{
+};
+
+template <class T, class = void, class = void>
+struct is_const_buffer_sequence : false_type
+{
+};
+template <class T,
+          class = void_t<decltype(buffer_sequence_begin(declval<T>()))>,
+          class = void_t<decltype(buffer_sequence_end(declval<T>()))>>
+struct is_const_buffer_sequence : true_type
+{
+};
+
+template <class T, class = void, class = void, class = void, class = void, class = void, class = void, class = void, class = void, class = void>
+struct is_dynamic_buffer : false_type
+{
+};
+template <class T,
+          class = void_t<typename T::const_buffers_type>,
+          class = void_t<typename T::mutable_buffers_type>,
+          class = void_t<decltype(declval<T>().size())>,
+          class = void_t<decltype(declval<T>().max_size())>,
+          class = void_t<decltype(declval<T>().capacity())>,
+          class = void_t<decltype(declval<T>().data())>,
+          class = void_t<decltype(declval<T>().prepare(0))>,
+          class = void_t<decltype(declval<T>().commit(0))>,
+          class = void_t<decltype(declval<T>().consume(0))>>
+struct is_dynamic_buffer : true_type
+{
+};
 
 template <class T>
 constexpr bool is_mutable_buffer_sequence_v{ is_mutable_buffer_sequence<T>::value };
@@ -42,25 +137,48 @@ constexpr bool is_const_buffer_sequence_v{ is_const_buffer_sequence<T>::value };
 template <class T>
 constexpr bool is_dynamic_buffer_v{ is_dynamic_buffer<T>::value };
 
-const mutable_buffer* buffer_sequence_begin(const mutable_buffer& b) noexcept;
-const const_buffer* buffer_sequence_begin(const const_buffer& b) noexcept;
-const mutable_buffer* buffer_sequence_end(const mutable_buffer& b) noexcept;
-const const_buffer* buffer_sequence_end(const const_buffer& b) noexcept;
+inline const mutable_buffer* buffer_sequence_begin(const mutable_buffer& b) noexcept { return addressof(b); }
+inline const const_buffer* buffer_sequence_begin(const const_buffer& b) noexcept { return addressof(b); }
+inline const mutable_buffer* buffer_sequence_end(const mutable_buffer& b) noexcept { return addressof(b) + 1; }
+inline const const_buffer* buffer_sequence_end(const const_buffer& b) noexcept { return addressof(b) + 1; }
 template <class C>
-auto buffer_sequence_begin(C& c) noexcept -> decltype(c.begin());
+inline decltype(auto) buffer_sequence_begin(C& c) noexcept
+{
+    return c.begin();
+}
 template <class C>
-auto buffer_sequence_begin(const C& c) noexcept -> decltype(c.begin());
+inline decltype(auto) buffer_sequence_begin(const C& c) noexcept
+{
+    return c.begin();
+}
 template <class C>
-auto buffer_sequence_end(C& c) noexcept -> decltype(c.end());
+inline decltype(auto) buffer_sequence_end(C& c) noexcept
+{
+    return c.end();
+}
 template <class C>
-auto buffer_sequence_end(const C& c) noexcept -> decltype(c.end());
+inline decltype(auto) buffer_sequence_end(const C& c) noexcept
+{
+    return c.end();
+}
 
 template <class ConstBufferSequence>
-size_t buffer_size(const ConstBufferSequence& buffers) noexcept;
+inline size_t buffer_size(const ConstBufferSequence& buffers) noexcept
+{
+    size_t total_size{ 0 };
+    auto i{ buffer_sequence_begin(buffers) };
+    auto end{ buffer_sequence_end(buffers) };
+    for (; i != end; ++i)
+    {
+        const_buffer b{ *i };
+        total_size += b.size();
+    }
+    return total_size;
+}
 template <class MutableBufferSequence, class ConstBufferSequence>
-size_t buffer_copy(const MutableBufferSequence& dest, const ConstBufferSequence& source) noexcept;
+inline size_t buffer_copy(const MutableBufferSequence& dest, const ConstBufferSequence& source) noexcept;
 template <class MutableBufferSequence, class ConstBufferSequence>
-size_t buffer_copy(const MutableBufferSequence& dest, const ConstBufferSequence& source, size_t max_size) noexcept;
+inline size_t buffer_copy(const MutableBufferSequence& dest, const ConstBufferSequence& source, size_t max_size) noexcept;
 
 mutable_buffer operator+(const mutable_buffer& b, size_t n) noexcept;
 mutable_buffer operator+(size_t n, const mutable_buffer& b) noexcept;
