@@ -328,12 +328,12 @@ namespace std
                 executor_type get_executor() const noexcept { return ex_; }
 
                 template <class... Args>
-                auto operator()(Args&&... args)
+                decltype(auto) operator()(Args&&... args)
                 {
                     return ex_(forward<Args>(args)...);
                 }
                 template <class... Args>
-                auto operator()(Args&&... args) const
+                decltype(auto) operator()(Args&&... args) const
                 {
                     return ex_(forward<Args>(args)...);
                 }
@@ -606,7 +606,7 @@ namespace std
                     return *this;
                 }
 
-                ~executor();
+                ~executor() {}
 
                 void swap(executor& other) noexcept { impl_.swap(other.impl_); }
                 template <class Executor, class ProtoAllocator>
@@ -800,7 +800,7 @@ namespace std
                     return *this;
                 }
 
-                ~strand();
+                ~strand() {}
 
                 inner_executor_type get_inner_executor() const noexcept { return inner_ex_; }
 
@@ -812,46 +812,46 @@ namespace std
                 void on_work_finished() const noexcept { inner_ex_.on_work_finished(); }
 
                 template <class Func, class ProtoAllocator>
-                void dispatch(Func&& f, const ProtoAllocator& a) const;
+                void dispatch(Func&& f, const ProtoAllocator& a) const
+                {
+                    if (running_in_this_thread())
+                    {
+                        decay_t<Func> tmp{ forward<Func>(f) };
+                        tmp();
+                    }
+                    else
+                    {
+                        inner_ex_.dispatch(forward<Func>(f), a);
+                    }
+                }
                 template <class Func, class ProtoAllocator>
-                void post(Func&& f, const ProtoAllocator& a) const;
+                void post(Func&& f, const ProtoAllocator& a) const
+                {
+                    inner_ex_.post(forward<Func>(f), a);
+                }
                 template <class Func, class ProtoAllocator>
-                void defer(Func&& f, const ProtoAllocator& a) const;
+                void defer(Func&& f, const ProtoAllocator& a) const
+                {
+                    inner_ex_.defer(forward<func>(f), a);
+                }
 
             private:
                 Executor inner_ex_;
+
+                template <class Executor>
+                friend bool operator==(const strand<Executor>&, const strand<Executor>&);
             };
 
             template <class Executor>
-            bool operator==(const strand<Executor>& a, const strand<Executor>& b);
+            inline bool operator==(const strand<Executor>& a, const strand<Executor>& b)
+            {
+                return a.inner_ex_ == b.inner_ex_;
+            }
             template <class Executor>
             inline bool operator!=(const strand<Executor>& a, const strand<Executor>& b)
             {
                 return !(a == b);
             }
-
-            template <class ProtoAllocator = allocator<void>>
-            class use_future_t
-            {
-            public:
-                using allocator_type = ProtoAllocator;
-
-                constexpr use_future_t() noexcept(noexcept(allocator_type())) : alloc_() {}
-                explicit use_future_t(const allocator_type& a) noexcept : alloc_(a) {}
-
-                template <class OtherProtoAllocator>
-                use_future_t<OtherProtoAllocator> rebind(const OtherProtoAllocator& a) const noexcept;
-
-                allocator_type get_allocator() const noexcept { return alloc_; }
-
-                template <class F>
-                auto operator()(F&& f) const;
-
-            private:
-                ProtoAllocator alloc_;
-            };
-
-            constexpr use_future_t<> use_future{};
 
             template <typename T, typename F>
             class _Promise_invoker
@@ -929,6 +929,89 @@ namespace std
 
                 shared_ptr<promise<T>> p_;
             };
+
+            template <class Func, class ProtoAllocator>
+            struct _Packaged_token
+            {
+                Func func;
+                ProtoAllocator alloc;
+            };
+
+            template <class Func, class ProtoAllocator, class Result>
+            class _Packaged_handler : public _Promise_creator<Result>
+            {
+            public:
+                using allocator_type = ProtoAllocator;
+                using result_type = void;
+
+                _Packaged_handler(_Packaged_token<Func, ProtoAllocator> t) : function_(move(t.func)), alloc_(t.alloc)
+                {
+                    this->create_promise(alloc_);
+                }
+
+                allocator_type get_allocator() const noexcept { return alloc_; }
+
+                template <class... Args>
+                void operator()(Args&&... args)
+                {
+                    try
+                    {
+                        this->p_->set_value(function_(forward<Args>(args)...));
+                    }
+                    catch (...)
+                    {
+                        this->p_->set_exception(current_exception());
+                    }
+                }
+
+            private:
+                Func function_;
+                ProtoAllocator alloc_;
+            };
+
+            template <class Func, class ProtoAllocator, class Result, class... Args>
+            class async_result<_Packaged_token<Func, ProtoAllocator>, Result(Args...)>
+            {
+            public:
+                using completion_handler_type = _Packaged_handler<Func, ProtoAllocator, invoke_result<Func, Args...>>;
+                using return_type = typename completion_handler_type::future_type;
+
+                explicit async_result(completion_handler_type& h) : future_(h.get_future) {}
+
+                return_type get() { return move(future_); }
+
+            private:
+                return_type future_;
+            };
+
+            template <class ProtoAllocator = allocator<void>>
+            class use_future_t
+            {
+            public:
+                using allocator_type = ProtoAllocator;
+
+                constexpr use_future_t() noexcept(noexcept(allocator_type())) : alloc_() {}
+                explicit use_future_t(const allocator_type& a) noexcept : alloc_(a) {}
+
+                template <class OtherProtoAllocator>
+                use_future_t<OtherProtoAllocator> rebind(const OtherProtoAllocator& a) const noexcept
+                {
+                    return use_future_t<OtherProtoAllocator>{ a };
+                }
+
+                allocator_type get_allocator() const noexcept { return alloc_; }
+
+                template <class F>
+                auto operator()(F&& f) const
+                {
+                    return _Packaged_token<decay_t<F>, ProtoAllocator>{ forward<F>(f), alloc_ };
+                }
+
+            private:
+                ProtoAllocator alloc_;
+            };
+
+            constexpr use_future_t<> use_future{};
 
             template <typename>
             struct _Promise_handler_selector;
