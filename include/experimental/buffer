@@ -1,6 +1,7 @@
 #ifndef NET_BUFFER
 #define NET_BUFFER
 
+#include <algorithm>
 #include <array>
 #include <string>
 #include <string_view>
@@ -56,11 +57,18 @@ public:
     size_t size() const noexcept { return size_; }
     mutable_buffer& operator+=(size_t n) noexcept
     {
-        n = n < size_ ? n : size_;
+        n = min(n, size_);
         data_ = static_cast<char*>(data_) + n;
         size_ -= n;
         return *this;
     }
+
+    friend mutable_buffer operator+(const mutable_buffer& b, size_t n) noexcept
+    {
+        n = min(n, size_);
+        return mutable_buffer{ static_cast<char*>(b.data_) + n, b.size_ - n };
+    }
+    friend mutable_buffer operator+(size_t n, const mutable_buffer& b) noexcept { return b + n; }
 
 private:
     void* data_;
@@ -79,11 +87,18 @@ public:
     size_t size() const noexcept { return size_; }
     const_buffer& operator+=(size_t n) noexcept
     {
-        n = n < size_ ? n : size_;
+        n = min(n, size_);
         data_ = static_cast<const char*>(data_) + n;
         size_ -= n;
         return *this;
     }
+
+    friend const_buffer operator+(const const_buffer& b, size_t n) noexcept
+    {
+        n = min(n, size_);
+        return const_buffer{ static_cast<const char*>(b.data_) + n, b.size_ - n };
+    }
+    friend const_buffer operator+(size_t n, const const_buffer& b) noexcept { return b + n; }
 
 private:
     const void* data_;
@@ -180,76 +195,214 @@ inline size_t buffer_copy(const MutableBufferSequence& dest, const ConstBufferSe
 template <class MutableBufferSequence, class ConstBufferSequence>
 inline size_t buffer_copy(const MutableBufferSequence& dest, const ConstBufferSequence& source, size_t max_size) noexcept;
 
-mutable_buffer operator+(const mutable_buffer& b, size_t n) noexcept;
-mutable_buffer operator+(size_t n, const mutable_buffer& b) noexcept;
-const_buffer operator+(const const_buffer&, size_t n) noexcept;
-const_buffer operator+(size_t, const const_buffer&) noexcept;
+inline mutable_buffer buffer(void* p, size_t n) noexcept { return mutable_buffer{ p, n }; }
+inline const_buffer buffer(const void* p, size_t n) noexcept { return const_buffer{ p, n }; }
 
-mutable_buffer buffer(void* p, size_t n) noexcept;
-const_buffer buffer(const void* p, size_t n) noexcept;
-
-mutable_buffer buffer(const mutable_buffer& b) noexcept;
-mutable_buffer buffer(const mutable_buffer& b, size_t n) noexcept;
-const_buffer buffer(const const_buffer& b) noexcept;
-const_buffer buffer(const const_buffer& b, size_t n) noexcept;
+inline mutable_buffer buffer(const mutable_buffer& b) noexcept { return b; }
+inline mutable_buffer buffer(const mutable_buffer& b, size_t n) noexcept { return mutable_buffer{ b.data(), min(n, b.size()) }; }
+inline const_buffer buffer(const const_buffer& b) noexcept { return b; }
+inline const_buffer buffer(const const_buffer& b, size_t n) noexcept { return const_buffer{ b.data(), min(n, b.size()) }; }
 
 template <class T, size_t N>
-mutable_buffer buffer(T (&data)[N]) noexcept;
+inline mutable_buffer buffer(T (&data)[N]) noexcept
+{
+    return buffer(begin(data) != end(data) ? addressof(*begin(data)) : nullptr, (end(data) - begin(data)) * sizeof(*begin(data)));
+}
 template <class T, size_t N>
-const_buffer buffer(const T (&data)[N]) noexcept;
+inline const_buffer buffer(const T (&data)[N]) noexcept
+{
+    return buffer(begin(data) != end(data) ? addressof(*begin(data)) : nullptr, (end(data) - begin(data)) * sizeof(*begin(data)));
+}
 template <class T, size_t N>
-mutable_buffer buffer(array<T, N>& data) noexcept;
+inline mutable_buffer buffer(array<T, N>& data) noexcept
+{
+    return buffer(begin(data) != end(data) ? addressof(*begin(data)) : nullptr, (end(data) - begin(data)) * sizeof(*begin(data)));
+}
 template <class T, size_t N>
-const_buffer buffer(array<const T, N>& data) noexcept;
+inline const_buffer buffer(array<const T, N>& data) noexcept
+{
+    return buffer(begin(data) != end(data) ? addressof(*begin(data)) : nullptr, (end(data) - begin(data)) * sizeof(*begin(data)));
+}
 template <class T, size_t N>
-const_buffer buffer(const array<T, N>& data) noexcept;
+inline const_buffer buffer(const array<T, N>& data) noexcept
+{
+    return buffer(begin(data) != end(data) ? addressof(*begin(data)) : nullptr, (end(data) - begin(data)) * sizeof(*begin(data)));
+}
 template <class T, class Allocator>
-mutable_buffer buffer(vector<T, Allocator>& data) noexcept;
+inline mutable_buffer buffer(vector<T, Allocator>& data) noexcept
+{
+    return buffer(begin(data) != end(data) ? addressof(*begin(data)) : nullptr, (end(data) - begin(data)) * sizeof(*begin(data)));
+}
 template <class T, class Allocator>
-const_buffer buffer(const vector<T, Allocator>& data) noexcept;
+inline const_buffer buffer(const vector<T, Allocator>& data) noexcept
+{
+    return buffer(begin(data) != end(data) ? addressof(*begin(data)) : nullptr, (end(data) - begin(data)) * sizeof(*begin(data)));
+}
 template <class CharT, class Traits, class Allocator>
-mutable_buffer buffer(basic_string<CharT, Traits, Allocator>& data) noexcept;
+inline mutable_buffer buffer(basic_string<CharT, Traits, Allocator>& data) noexcept
+{
+    return buffer(begin(data) != end(data) ? addressof(*begin(data)) : nullptr, (end(data) - begin(data)) * sizeof(*begin(data)));
+}
 template <class CharT, class Traits, class Allocator>
-const_buffer buffer(const basic_string<CharT, Traits, Allocator>& data) noexcept;
+inline const_buffer buffer(const basic_string<CharT, Traits, Allocator>& data) noexcept
+{
+    return buffer(begin(data) != end(data) ? addressof(*begin(data)) : nullptr, (end(data) - begin(data)) * sizeof(*begin(data)));
+}
 template <class CharT, class Traits>
-const_buffer buffer(basic_string_view<CharT, Traits> data) noexcept;
+inline const_buffer buffer(basic_string_view<CharT, Traits> data) noexcept
+{
+    return buffer(begin(data) != end(data) ? addressof(*begin(data)) : nullptr, (end(data) - begin(data)) * sizeof(*begin(data)));
+}
 
 template <class T, size_t N>
-mutable_buffer buffer(T (&data)[N], size_t n) noexcept;
+inline mutable_buffer buffer(T (&data)[N], size_t n) noexcept
+{
+    return buffer(begin(data) != end(data) ? addressof(*begin(data)) : nullptr, (end(data) - begin(data)) * sizeof(*begin(data)));
+}
 template <class T, size_t N>
-const_buffer buffer(const T (&data)[N], size_t n) noexcept;
+inline const_buffer buffer(const T (&data)[N], size_t n) noexcept
+{
+    return buffer(begin(data) != end(data) ? addressof(*begin(data)) : nullptr, (end(data) - begin(data)) * sizeof(*begin(data)));
+}
 template <class T, size_t N>
-mutable_buffer buffer(array<T, N>& data, size_t n) noexcept;
+inline mutable_buffer buffer(array<T, N>& data, size_t n) noexcept
+{
+    return buffer(begin(data) != end(data) ? addressof(*begin(data)) : nullptr, (end(data) - begin(data)) * sizeof(*begin(data)));
+}
 template <class T, size_t N>
-const_buffer buffer(array<const T, N>& data, size_t n) noexcept;
+inline const_buffer buffer(array<const T, N>& data, size_t n) noexcept
+{
+    return buffer(begin(data) != end(data) ? addressof(*begin(data)) : nullptr, (end(data) - begin(data)) * sizeof(*begin(data)));
+}
 template <class T, size_t N>
-const_buffer buffer(const array<T, N>& data, size_t n) noexcept;
+inline const_buffer buffer(const array<T, N>& data, size_t n) noexcept
+{
+    return buffer(begin(data) != end(data) ? addressof(*begin(data)) : nullptr, (end(data) - begin(data)) * sizeof(*begin(data)));
+}
 template <class T, class Allocator>
-mutable_buffer buffer(vector<T, Allocator>& data, size_t n) noexcept;
+inline mutable_buffer buffer(vector<T, Allocator>& data, size_t n) noexcept
+{
+    return buffer(begin(data) != end(data) ? addressof(*begin(data)) : nullptr, (end(data) - begin(data)) * sizeof(*begin(data)));
+}
 template <class T, class Allocator>
-const_buffer buffer(const vector<T, Allocator>& data, size_t n) noexcept;
+inline const_buffer buffer(const vector<T, Allocator>& data, size_t n) noexcept
+{
+    return buffer(begin(data) != end(data) ? addressof(*begin(data)) : nullptr, (end(data) - begin(data)) * sizeof(*begin(data)));
+}
 template <class CharT, class Traits, class Allocator>
-mutable_buffer buffer(basic_string<CharT, Traits, Allocator>& data, size_t n) noexcept;
+inline mutable_buffer buffer(basic_string<CharT, Traits, Allocator>& data, size_t n) noexcept
+{
+    return buffer(begin(data) != end(data) ? addressof(*begin(data)) : nullptr, (end(data) - begin(data)) * sizeof(*begin(data)));
+}
 template <class CharT, class Traits, class Allocator>
-const_buffer buffer(const basic_string<CharT, Traits, Allocator>& data, size_t n) noexcept;
+inline const_buffer buffer(const basic_string<CharT, Traits, Allocator>& data, size_t n) noexcept
+{
+    return buffer(begin(data) != end(data) ? addressof(*begin(data)) : nullptr, (end(data) - begin(data)) * sizeof(*begin(data)));
+}
 template <class CharT, class Traits>
-const_buffer buffer(basic_string_view<CharT, Traits> data, size_t n) noexcept;
+inline const_buffer buffer(basic_string_view<CharT, Traits> data, size_t n) noexcept
+{
+    return buffer(begin(data) != end(data) ? addressof(*begin(data)) : nullptr, (end(data) - begin(data)) * sizeof(*begin(data)));
+}
 
 template <class T, class Allocator>
-class dynamic_vector_buffer;
+class dynamic_vector_buffer
+{
+public:
+    using const_buffers_type = const_buffer;
+    using mutable_buffers_type = mutable_buffer;
+
+    explicit dynamic_vector_buffer(vector<T, Allocator>& vec) noexcept : vec_(vec), size_(vec.size()), max_size_(vec.max_size()) {}
+    dynamic_vector_buffer(vector<T, Allocator>& vec, size_t maximum_size) noexcept : vec_(vec), size_(vec.size()), max_size_(maximum_size) {}
+    dynamic_vector_buffer(dynamic_vector_buffer&&) = default;
+
+    size_t size() const noexcept { return size_; }
+    size_t max_size() const noexcept { return max_size_; }
+    size_t capacity() const noexcept { return vec_.capacity(); }
+    const_buffers_type data() const noexcept { return buffer(vec_, size_); }
+    mutable_buffers_type prepare(size_t n)
+    {
+        vec_.resize(size_ + n);
+        return buffer(buffer(vec_) + size_, n);
+    }
+    void commit(size_t n)
+    {
+        size_ += min(n, vec_.size() - size_);
+        vec_.resize(size_);
+    }
+    void consume(size_t n)
+    {
+        size_t m = min(n, size_);
+        vec_.erase(vec_.begin(), vec_.begin() + m);
+        size_ -= m;
+    }
+
+private:
+    vector<T, Allocator>& vec_;
+    size_t size_;
+    const size_t max_size_;
+};
 
 template <class CharT, class Traits, class Allocator>
-class dynamic_string_buffer;
+class dynamic_string_buffer
+{
+public:
+    using const_buffers_type = const_buffer;
+    using mutable_buffers_type = mutable_buffer;
+
+    explicit dynamic_string_buffer(basic_string<CharT, Traits, Allocator>& str) noexcept : str_(str), size_(str.size()), max_size_(str.max_size()) {}
+    dynamic_string_buffer(basic_string<CharT, Traits, Allocator>& str, size_t maximum_size) noexcept : str_(str), size_(str.size()), max_size_(maximum_size) {}
+    dynamic_string_buffer(dynamic_string_buffer&&) = default;
+
+    size_t size() const noexcept { return size_; }
+    size_t max_size() const noexcept { return max_size_; }
+    size_t capacity() const noexcept { return str_.capacity(); }
+    const_buffers_type data() const noexcept { buffer(str_, size_); }
+    mutable_buffers_type prepare(size_t n)
+    {
+        str_.resize(size_ + n);
+        return buffer(buffer(str_) + size_, n);
+    }
+
+    void commit(size_t n) noexcept
+    {
+        size_ += min(n, str_.size() - size_);
+        str_.resize(size_);
+    }
+    void consume(size_t n)
+    {
+        size_t m = min(n, size_);
+        str_.erase(0, m);
+        size_ -= m;
+    }
+
+private:
+    basic_string<CharT, Traits, Allocator>& str_;
+    size_t size_;
+    const size_t max_size_;
+};
 
 template <class T, class Allocator>
-dynamic_vector_buffer<T, Allocator> dynamic_buffer(vector<T, Allocator>& vec) noexcept;
+inline dynamic_vector_buffer<T, Allocator> dynamic_buffer(vector<T, Allocator>& vec) noexcept
+{
+    return dynamic_vector_buffer<T, Allocator>{ vec };
+}
 template <class T, class Allocator>
-dynamic_vector_buffer<T, Allocator> dynamic_buffer(vector<T, Allocator>& vec, size_t n) noexcept;
+inline dynamic_vector_buffer<T, Allocator> dynamic_buffer(vector<T, Allocator>& vec, size_t n) noexcept
+{
+    return dynamic_vector_buffer<T, Allocator>{ vec, n };
+}
 
 template <class CharT, class Traits, class Allocator>
-dynamic_string_buffer<CharT, Traits, Allocator> dynamic_buffer(basic_string<CharT, Traits, Allocator>& str) noexcept;
+inline dynamic_string_buffer<CharT, Traits, Allocator> dynamic_buffer(basic_string<CharT, Traits, Allocator>& str) noexcept
+{
+    return dynamic_string_buffer<CharT, Traits, Allocator>{ str };
+}
 template <class CharT, class Traits, class Allocator>
-dynamic_string_buffer<CharT, Traits, Allocator> dynamic_buffer(basic_string<CharT, Traits, Allocator>& str, size_t n) noexcept;
+inline dynamic_string_buffer<CharT, Traits, Allocator> dynamic_buffer(basic_string<CharT, Traits, Allocator>& str, size_t n) noexcept
+{
+    return dynamic_string_buffer<CharT, Traits, Allocator>{ str, n };
+}
 
 class transfer_all;
 class transfer_at_least;
