@@ -44,8 +44,8 @@ inline const error_category& stream_category() noexcept
     return instance;
 }
 
-inline error_code make_error_code(stream_errc e) noexcept { return error_code(static_cast<int>(e), stream_category()); }
-inline error_condition make_error_condition(stream_errc e) noexcept { return error_condition(static_cast<int>(e), stream_category()); }
+inline error_code make_error_code(stream_errc e) noexcept { return error_code{ static_cast<int>(e), stream_category() }; }
+inline error_condition make_error_condition(stream_errc e) noexcept { return error_condition{ static_cast<int>(e), stream_category() }; }
 
 class mutable_buffer
 {
@@ -404,74 +404,188 @@ inline dynamic_string_buffer<CharT, Traits, Allocator> dynamic_buffer(basic_stri
     return dynamic_string_buffer<CharT, Traits, Allocator>{ str, n };
 }
 
-class transfer_all;
-class transfer_at_least;
-class transfer_exactly;
+constexpr size_t _Default_max_transfer_size{ 65536 };
 
-template <class SyncReadStream, class MutableBufferSequence>
-size_t read(SyncReadStream& stream, const MutableBufferSequence& buffers);
-template <class SyncReadStream, class MutableBufferSequence>
-size_t read(SyncReadStream& stream, const MutableBufferSequence& buffers, error_code& ec);
-template <class SyncReadStream, class MutableBufferSequence, class CompletionCondition>
-size_t read(SyncReadStream& stream, const MutableBufferSequence& buffers, CompletionCondition completion_condition);
-template <class SyncReadStream, class MutableBufferSequence, class CompletionCondition>
-size_t read(SyncReadStream& stream, const MutableBufferSequence& buffers, CompletionCondition completion_condition, error_code& ec);
+class transfer_all
+{
+public:
+    size_t operator()(const error_code& ec, size_t) const { return !ec ? _Default_max_transfer_size : 0; }
+};
+
+class transfer_at_least
+{
+public:
+    explicit transfer_at_least(size_t m) : minimum_(m) {}
+    size_t operator()(const error_code& ec, size_t n) const { return !ec && n < minimum_ ? _Default_max_transfer_size : 0; }
+
+private:
+    size_t minimum_;
+};
+
+class transfer_exactly
+{
+public:
+    explicit transfer_exactly(size_t e) : exact_(e) {}
+    size_t operator()(const error_code& ec, size_t n) const { return !ec && n < exact_ ? min(exact_ - n, _Default_max_transfer_size) : 0; }
+
+private:
+    size_t exact_;
+};
+
+inline void _Check_error_code(error_code& ec, const char* what)
+{
+    if (ec)
+        throw system_error{ ec, what };
+}
+
+template <class SyncReadStream, class MutableBufferSequence, class CompletionCondition, class = enable_if_t<is_mutable_buffer_sequence_v<MutableBufferSequence>>>
+inline size_t read(SyncReadStream& stream, const MutableBufferSequence& buffers, CompletionCondition completion_condition, error_code& ec);
+template <class SyncReadStream, class MutableBufferSequence, class = enable_if_t<is_mutable_buffer_sequence_v<MutableBufferSequence>>>
+inline size_t read(SyncReadStream& stream, const MutableBufferSequence& buffers, error_code& ec)
+{
+    return read(stream, buffers, transfer_all{}, ec);
+}
+template <class SyncReadStream, class MutableBufferSequence, class CompletionCondition, class = enable_if_t<is_mutable_buffer_sequence_v<MutableBufferSequence>>>
+inline size_t read(SyncReadStream& stream, const MutableBufferSequence& buffers, CompletionCondition completion_condition)
+{
+    error_code ec;
+    size_t r{ read(stream, buffers, completion_condition, ec) };
+    _Check_error_code(ec, __func__);
+    return r;
+}
+template <class SyncReadStream, class MutableBufferSequence, class = enable_if_t<is_mutable_buffer_sequence_v<MutableBufferSequence>>>
+inline size_t read(SyncReadStream& stream, const MutableBufferSequence& buffers)
+{
+    error_code ec;
+    size_t r{ read(stream, buffers, transfer_all{}, ec) };
+    _Check_error_code(ec, __func__);
+    return r;
+}
+
+template <class SyncReadStream, class DynamicBuffer, class CompletionCondition, class = enable_if_t<is_dynamic_buffer_v<DynamicBuffer>>>
+inline size_t read(SyncReadStream& stream, DynamicBuffer&& b, CompletionCondition completion_condition, error_code& ec);
+template <class SyncReadStream, class DynamicBuffer, class = enable_if_t<is_dynamic_buffer_v<DynamicBuffer>>>
+inline size_t read(SyncReadStream& stream, DynamicBuffer&& b, error_code& ec)
+{
+    return read(stream, forward<DynamicBuffer>(b), transfer_all{}, ec);
+}
+template <class SyncReadStream, class DynamicBuffer, class CompletionCondition, class = enable_if_t<is_dynamic_buffer_v<DynamicBuffer>>>
+inline size_t read(SyncReadStream& stream, DynamicBuffer&& b, CompletionCondition completion_condition)
+{
+    error_code ec;
+    size_t r{ read(stream, forward<DynamicBuffer>(b), completion_condition, ec) };
+    _Check_error_code(ec, __func__);
+    return r;
+}
+template <class SyncReadStream, class DynamicBuffer, class = enable_if_t<is_dynamic_buffer_v<DynamicBuffer>>>
+inline size_t read(SyncReadStream& stream, DynamicBuffer&& b)
+{
+    error_code ec;
+    size_t r{ read(stream, forward<DynamicBuffer>(b), transfer_all{}, ec) };
+    _Check_error_code(ec, __func__);
+    return r;
+}
+
+template <class AsyncReadStream, class MutableBufferSequence, class CompletionCondition, class CompletionToken, class = enable_if_t<is_mutable_buffer_sequence_v<MutableBufferSequence>>>
+inline auto async_read(AsyncReadStream& stream, const MutableBufferSequence& buffers, CompletionCondition completion_condition, CompletionToken&& token);
+template <class AsyncReadStream, class MutableBufferSequence, class CompletionToken, class = enable_if_t<is_mutable_buffer_sequence_v<MutableBufferSequence>>>
+inline auto async_read(AsyncReadStream& stream, const MutableBufferSequence& buffers, CompletionToken&& token)
+{
+    return async_read(stream, buffers, transfer_all{}, forward<CompletionToken>(token));
+}
+
+template <class AsyncReadStream, class DynamicBuffer, class CompletionCondition, class CompletionToken, class = enable_if_t<is_dynamic_buffer_v<DynamicBuffer>>>
+inline auto async_read(AsyncReadStream& stream, DynamicBuffer&& b, CompletionCondition completion_condition, CompletionToken&& token);
+template <class AsyncReadStream, class DynamicBuffer, class CompletionToken, class = enable_if_t<is_dynamic_buffer_v<DynamicBuffer>>>
+inline auto async_read(AsyncReadStream& stream, DynamicBuffer&& b, CompletionToken&& token)
+{
+    return async_read(stream, forward<DynamicBuffer>(b), transfer_all{}, forward<CompletionToken>(token));
+}
+
+template <class SyncWriteStream, class ConstBufferSequence, class CompletionCondition, class = enable_if_t<is_const_buffer_sequence_v<ConstBufferSequence>>>
+inline size_t write(SyncWriteStream& stream, const ConstBufferSequence& buffers, CompletionCondition completion_condition, error_code& ec);
+template <class SyncWriteStream, class ConstBufferSequence, class = enable_if_t<is_const_buffer_sequence_v<ConstBufferSequence>>>
+inline size_t write(SyncWriteStream& stream, const ConstBufferSequence& buffers, error_code& ec)
+{
+    return write(stream, buffers, transfer_all{}, ec);
+}
+template <class SyncWriteStream, class ConstBufferSequence, class CompletionCondition, class = enable_if_t<is_const_buffer_sequence_v<ConstBufferSequence>>>
+inline size_t write(SyncWriteStream& stream, const ConstBufferSequence& buffers, CompletionCondition completion_condition)
+{
+    error_code ec;
+    size_t r{ write(stream, buffers, completion_condition, ec) };
+    _Check_error_code(ec, __func__);
+    return r;
+}
+template <class SyncWriteStream, class ConstBufferSequence, class = enable_if_t<is_const_buffer_sequence_v<ConstBufferSequence>>>
+inline size_t write(SyncWriteStream& stream, const ConstBufferSequence& buffers)
+{
+    error_code ec;
+    size_t r{ write(stream, buffers, transfer_all{}, ec) };
+    _Check_error_code(ec, __func__);
+    return r;
+}
+
+template <class SyncWriteStream, class DynamicBuffer, class CompletionCondition, class = enable_if_t<is_dynamic_buffer_v<DynamicBuffer>>>
+inline size_t write(SyncWriteStream& stream, DynamicBuffer&& b, CompletionCondition completion_condition, error_code& ec);
+template <class SyncWriteStream, class DynamicBuffer, class = enable_if_t<is_dynamic_buffer_v<DynamicBuffer>>>
+inline size_t write(SyncWriteStream& stream, DynamicBuffer&& b, error_code& ec)
+{
+    return write(stream, forward<DynamicBuffer>(b), transfer_all{}, ec);
+}
+template <class SyncWriteStream, class DynamicBuffer, class CompletionCondition, class = enable_if_t<is_dynamic_buffer_v<DynamicBuffer>>>
+inline size_t write(SyncWriteStream& stream, DynamicBuffer&& b, CompletionCondition completion_condition)
+{
+    error_code ec;
+    size_t r{ write(stream, forward<DynamicBuffer>(b), completion_condition, ec) };
+    _Check_error_code(ec, __func__);
+    return r;
+}
+template <class SyncWriteStream, class DynamicBuffer, class = enable_if_t<is_dynamic_buffer_v<DynamicBuffer>>>
+inline size_t write(SyncWriteStream& stream, DynamicBuffer&& b)
+{
+    error_code ec;
+    size_t r{ write(stream, forward<DynamicBuffer>(b), transfer_all{}, ec) };
+    _Check_error_code(ec, __func__);
+    return r;
+}
+
+template <class AsyncWriteStream, class ConstBufferSequence, class CompletionCondition, class CompletionToken, class = enable_if_t<is_const_buffer_sequence_v<ConstBufferSequence>>>
+inline auto async_write(AsyncWriteStream& stream, const ConstBufferSequence& buffers, CompletionCondition completion_condition, CompletionToken&& token);
+template <class AsyncWriteStream, class ConstBufferSequence, class CompletionToken, class = enable_if_t<is_const_buffer_sequence_v<ConstBufferSequence>>>
+inline auto async_write(AsyncWriteStream& stream, const ConstBufferSequence& buffers, CompletionToken&& token)
+{
+    return async_write(stream, buffers, transfer_all{}, forward<CompletionToken>(token));
+}
+
+template <class AsyncWriteStream, class DynamicBuffer, class CompletionCondition, class CompletionToken, class = enable_if_t<is_dynamic_buffer_v<DynamicBuffer>>>
+inline auto async_write(AsyncWriteStream& stream, DynamicBuffer&& b, CompletionCondition completion_condition, CompletionToken&& token);
+template <class AsyncWriteStream, class DynamicBuffer, class CompletionToken, class = enable_if_t<is_dynamic_buffer_v<DynamicBuffer>>>
+inline auto async_write(AsyncWriteStream& stream, DynamicBuffer&& b, CompletionToken&& token)
+{
+    return async_write(stream, forward<DynamicBuffer>(b), transfer_all{}, forward<CompletionToken>(token));
+}
 
 template <class SyncReadStream, class DynamicBuffer>
-size_t read(SyncReadStream& stream, DynamicBuffer&& b);
+inline size_t read_until(SyncReadStream& s, DynamicBuffer&& b, char delim, error_code& ec);
 template <class SyncReadStream, class DynamicBuffer>
-size_t read(SyncReadStream& stream, DynamicBuffer&& b, error_code& ec);
-template <class SyncReadStream, class DynamicBuffer, class CompletionCondition>
-size_t read(SyncReadStream& stream, DynamicBuffer&& b, CompletionCondition completion_condition);
-template <class SyncReadStream, class DynamicBuffer, class CompletionCondition>
-size_t read(SyncReadStream& stream, DynamicBuffer&& b, CompletionCondition completion_condition, error_code& ec);
-
-template <class AsyncReadStream, class MutableBufferSequence, class CompletionToken>
-auto async_read(AsyncReadStream& stream, const MutableBufferSequence& buffers, CompletionToken&& token);
-template <class AsyncReadStream, class MutableBufferSequence, class CompletionCondition, class CompletionToken>
-auto async_read(AsyncReadStream& stream, const MutableBufferSequence& buffers, CompletionCondition completion_condition, CompletionToken&& token);
-
-template <class AsyncReadStream, class DynamicBuffer, class CompletionToken>
-auto async_read(AsyncReadStream& stream, DynamicBuffer&& b, CompletionToken&& token);
-template <class AsyncReadStream, class DynamicBuffer, class CompletionCondition, class CompletionToken>
-auto async_read(AsyncReadStream& stream, DynamicBuffer&& b, CompletionCondition completion_condition, CompletionToken&& token);
-
-template <class SyncWriteStream, class ConstBufferSequence>
-size_t write(SyncWriteStream& stream, const ConstBufferSequence& buffers);
-template <class SyncWriteStream, class ConstBufferSequence>
-size_t write(SyncWriteStream& stream, const ConstBufferSequence& buffers, error_code& ec);
-template <class SyncWriteStream, class ConstBufferSequence, class CompletionCondition>
-size_t write(SyncWriteStream& stream, const ConstBufferSequence& buffers, CompletionCondition completion_condition);
-template <class SyncWriteStream, class ConstBufferSequence, class CompletionCondition>
-size_t write(SyncWriteStream& stream, const ConstBufferSequence& buffers, CompletionCondition completion_condition, error_code& ec);
-
-template <class SyncWriteStream, class DynamicBuffer>
-size_t write(SyncWriteStream& stream, DynamicBuffer&& b);
-template <class SyncWriteStream, class DynamicBuffer>
-size_t write(SyncWriteStream& stream, DynamicBuffer&& b, error_code& ec);
-template <class SyncWriteStream, class DynamicBuffer, class CompletionCondition>
-size_t write(SyncWriteStream& stream, DynamicBuffer&& b, CompletionCondition completion_condition);
-template <class SyncWriteStream, class DynamicBuffer, class CompletionCondition>
-size_t write(SyncWriteStream& stream, DynamicBuffer&& b, CompletionCondition completion_condition, error_code& ec);
-
-template <class AsyncWriteStream, class ConstBufferSequence, class CompletionToken>
-auto async_write(AsyncWriteStream& stream, const ConstBufferSequence& buffers, CompletionToken&& token);
-template <class AsyncWriteStream, class ConstBufferSequence, class CompletionCondition, class CompletionToken>
-auto async_write(AsyncWriteStream& stream, const ConstBufferSequence& buffers, CompletionCondition completion_condition, CompletionToken&& token);
-
-template <class AsyncWriteStream, class DynamicBuffer, class CompletionToken>
-auto async_write(AsyncWriteStream& stream, DynamicBuffer&& b, CompletionToken&& token);
-template <class AsyncWriteStream, class DynamicBuffer, class CompletionCondition, class CompletionToken>
-auto async_write(AsyncWriteStream& stream, DynamicBuffer&& b, CompletionCondition completion_condition, CompletionToken&& token);
-
+inline size_t read_until(SyncReadStream& s, DynamicBuffer&& b, char delim)
+{
+    error_code ec;
+    size_t r{ read_until(s, forward<DynamicBuffer>(b), delim, ec) };
+    _Check_error_code(ec, __func__);
+    return r;
+}
 template <class SyncReadStream, class DynamicBuffer>
-size_t read_until(SyncReadStream& s, DynamicBuffer&& b, char delim);
+inline size_t read_until(SyncReadStream& s, DynamicBuffer&& b, string_view delim, error_code& ec);
 template <class SyncReadStream, class DynamicBuffer>
-size_t read_until(SyncReadStream& s, DynamicBuffer&& b, char delim, error_code& ec);
-template <class SyncReadStream, class DynamicBuffer>
-size_t read_until(SyncReadStream& s, DynamicBuffer&& b, string_view delim);
-template <class SyncReadStream, class DynamicBuffer>
-size_t read_until(SyncReadStream& s, DynamicBuffer&& b, string_view delim, error_code& ec);
+inline size_t read_until(SyncReadStream& s, DynamicBuffer&& b, string_view delim)
+{
+    error_code ec;
+    size_t r{ read_until(s, forward<DynamicBuffer>(b), delim, ec) };
+    _Check_error_code(ec, __func__);
+    return r;
+}
 
 template <class AsyncReadStream, class DynamicBuffer, class CompletionToken>
 auto async_read_until(AsyncReadStream& s, DynamicBuffer&& b, char delim, CompletionToken&& token);

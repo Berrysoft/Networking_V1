@@ -2,6 +2,7 @@
 #define NET_INTERNET
 
 #include <array>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -22,10 +23,33 @@ enum class resolver_errc
     service_not_found = -8 // EAI_SERVICE
 };
 
-const error_category& resolver_category() noexcept;
+struct _Resolver_category : error_category
+{
+    const char* name() const noexcept override { return "resolver"; }
+    string message(int value) const override
+    {
+        switch (value)
+        {
+        case static_cast<int>(resolver_errc::host_not_found):
+            return "Host not found";
+        case static_cast<int>(resolver_errc::try_again):
+            return "Try again later";
+        case static_cast<int>(resolver_errc::service_not_found):
+            return "Service not found";
+        default:
+            return "resolver error";
+        }
+    }
+};
 
-error_code make_error_code(resolver_errc e) noexcept;
-error_condition make_error_condition(resolver_errc e) noexcept;
+inline const error_category& resolver_category() noexcept
+{
+    static _Resolver_category instance{};
+    return instance;
+}
+
+inline error_code make_error_code(resolver_errc e) noexcept { return error_code{ static_cast<int>(e), resolver_category() }; }
+inline error_condition make_error_condition(resolver_errc e) noexcept { return error_condition{ static_cast<int>(e), resolver_category() }; }
 
 using port_type = uint_least16_t;
 using scope_id_type = uint_least32_t;
@@ -55,7 +79,7 @@ public:
     constexpr bool is_loopback() const noexcept;
     constexpr bool is_multicast() const noexcept;
     template <class Allocator = allocator<char>>
-    basic_string<char, char_traits<char>, Allocator> to_string(const Allocator& a = Allocator()) const;
+    basic_string<char, char_traits<char>, Allocator> to_string(const Allocator& a = {}) const;
 
 private:
     address_v4 v4_;
@@ -86,7 +110,7 @@ public:
     constexpr bytes_type to_bytes() const noexcept;
     constexpr uint_type to_uint() const noexcept;
     template <class Allocator = allocator<char>>
-    basic_string<char, char_traits<char>, Allocator> to_string(const Allocator& a = Allocator()) const;
+    basic_string<char, char_traits<char>, Allocator> to_string(const Allocator& a = {}) const;
 
     static constexpr address_v4 any() noexcept;
     static constexpr address_v4 loopback() noexcept;
@@ -123,7 +147,7 @@ public:
     constexpr bool is_multicast_global() const noexcept;
     constexpr bytes_type to_bytes() const noexcept;
     template <class Allocator = allocator<char>>
-    basic_string<char, char_traits<char>, Allocator> to_string(const Allocator& a = Allocator()) const;
+    basic_string<char, char_traits<char>, Allocator> to_string(const Allocator& a = {}) const;
 
     static constexpr address_v6 any() noexcept;
     static constexpr address_v6 loopback() noexcept;
@@ -318,8 +342,6 @@ struct is_error_condition_enum<experimental::net::v1::ip::resolver_errc> : publi
 {
 };
 
-template <class T>
-struct hash;
 template <>
 struct hash<experimental::net::v1::ip::address>;
 template <>
