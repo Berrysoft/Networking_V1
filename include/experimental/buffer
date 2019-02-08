@@ -191,9 +191,37 @@ inline size_t buffer_size(const ConstBufferSequence& buffers) noexcept
     return total_size;
 }
 template <class MutableBufferSequence, class ConstBufferSequence>
-inline size_t buffer_copy(const MutableBufferSequence& dest, const ConstBufferSequence& source) noexcept;
+inline size_t buffer_copy(const MutableBufferSequence& dest, const ConstBufferSequence& source, size_t max_size) noexcept
+{
+    auto begin1{ buffer_sequence_begin(dest) };
+    auto end1{ buffer_sequence_end(dest) };
+    auto begin2{ buffer_sequence_begin(source) };
+    auto end2{ buffer_sequence_end(source) };
+    mutable_buffer d{ *begin1 };
+    const_buffer s{ *begin2 };
+    size_t r{ 0 };
+    while (begin1 != end1 && begin2 != end2 && max_size)
+    {
+        size_t n{ min(min(d.size(), s.size()), max_size) };
+        copy(s.data(), s.data() + n, d.data());
+        if ((!((s += n).size())) && ++begin2)
+        {
+            s = *begin2;
+        }
+        if ((!((d += n).size())) && ++begin1)
+        {
+            d = *begin1;
+        }
+        max_size -= n;
+        r += n;
+    }
+    return r;
+}
 template <class MutableBufferSequence, class ConstBufferSequence>
-inline size_t buffer_copy(const MutableBufferSequence& dest, const ConstBufferSequence& source, size_t max_size) noexcept;
+inline size_t buffer_copy(const MutableBufferSequence& dest, const ConstBufferSequence& source) noexcept
+{
+    return buffer_copy(dest, source, numeric_limits<size_t>::max());
+}
 
 inline mutable_buffer buffer(void* p, size_t n) noexcept { return mutable_buffer{ p, n }; }
 inline const_buffer buffer(const void* p, size_t n) noexcept { return const_buffer{ p, n }; }
@@ -432,6 +460,104 @@ private:
     size_t exact_;
 };
 
+template <class Buffers>
+struct _Prepared_buffers_max
+{
+    constexpr size_t value{ 64 };
+};
+template <class Elem, size_t N>
+struct _Prepared_buffers_max<array<Elem, N>>
+{
+    constexpr size_t value{ N };
+};
+
+template <class Buffers>
+constexpr size_t _Prepared_buffers_max_v{ _Prepared_buffers_max<Buffers>::value };
+
+template <class Buffer, size_t MaxBuffers>
+struct _Prepared_buffers
+{
+    using value_type = Buffer;
+    using const_iterator = const Buffer*;
+
+    constexpr size_t max_buffers{ MaxBuffers < 16 ? MaxBuffers : 16 };
+
+    _Prepared_buffers() : count(0) {}
+    const_iterator begin() const { return elems; }
+    const_iterator end() const { return elems + count; }
+
+    Buffer elems[max_buffers];
+    size_t count;
+};
+
+template <class Buffer, class Buffers, class Buffer_Iterator>
+class _Consuming_buffers
+{
+public:
+    using prepared_buffers_type = _Prepared_buffers<Buffer, _Prepared_buffers_max_v<Buffers>>;
+
+    explicit _Consuming_buffers(const Buffers& buffers)
+        : buffers_(buffers), total_consumed_(0), next_elem_(0), next_elem_offset_(0)
+    {
+        total_size_ = buffer_size(buffers);
+    }
+
+    bool empty() const { return total_consumed_ >= total_size_; }
+
+    prepared_buffers_type prepare(size_t max_size)
+    {
+        prepared_buffers_type result;
+        Buffer_Iterator next{ buffer_sequence_begin(buffers_) };
+        Buffer_Iterator end{ buffer_sequence_end(buffers_) };
+        advance(next, next_elem_);
+        size_t elem_offset{ next_elem_offset_ };
+        while (next != end && max_size > 0 && result.count < result.max_buffers)
+        {
+            Buffer next_buf{ Buffer{ *next } + elem_offset };
+            result.elems[result.count] = buffer(next_buf, max_size);
+            max_size -= result.elems[result.count].size();
+            elem_offset = 0;
+            if (result.elems[result.count].size() > 0)
+                ++result.count;
+            ++next;
+        }
+        return result;
+    }
+
+    void consume(std::size_t size)
+    {
+        total_consumed_ += size;
+        Buffer_Iterator next{ buffer_sequence_begin(buffers_) };
+        Buffer_Iterator end{ buffer_sequence_end(buffers_) };
+        advance(next, next_elem_);
+        while (next != end && size > 0)
+        {
+            Buffer next_buf{ Buffer{ *next } + next_elem_offset_ };
+            if (size < next_buf.size())
+            {
+                next_elem_offset_ += size;
+                size = 0;
+            }
+            else
+            {
+                size -= next_buf.size();
+                next_elem_offset_ = 0;
+                ++next_elem_;
+                ++next;
+            }
+        }
+    }
+
+    size_t total_consumed() const { return total_consumed_; }
+
+private:
+    Buffers buffers_;
+    size_t total_size_;
+    size_t total_consumed_;
+    size_t next_elem_;
+    size_t next_elem_offset_;
+};
+
 inline void _Check_error_code(error_code& ec, const char* what)
 {
     if (ec)
@@ -439,7 +565,23 @@ inline void _Check_error_code(error_code& ec, const char* what)
 }
 
 template <class SyncReadStream, class MutableBufferSequence, class CompletionCondition, class = enable_if_t<is_mutable_buffer_sequence_v<MutableBufferSequence>>>
-inline size_t read(SyncReadStream& stream, const MutableBufferSequence& buffers, CompletionCondition completion_condition, error_code& ec);
+inline size_t read(SyncReadStream& stream, const MutableBufferSequence& buffers, CompletionCondition completion_condition, error_code& ec)
+{
+    ec = error_code{};
+    _Consuming_buffers<mutable_buffer, MutableBufferSequence, decltype(buffer_sequence_begin(buffers))> tmp{ buffers };
+    while (!tmp.empty())
+    {
+        if (size_t max_size{ completion_condition(ec, tmp.total_consumed()) })
+        {
+            tmp.consume(stream.read_some(tmp.prepare(max_size), ec));
+        }
+        else
+        {
+            break;
+        }
+    }
+    return tmp.total_consumed();
+}
 template <class SyncReadStream, class MutableBufferSequence, class = enable_if_t<is_mutable_buffer_sequence_v<MutableBufferSequence>>>
 inline size_t read(SyncReadStream& stream, const MutableBufferSequence& buffers, error_code& ec)
 {
@@ -463,7 +605,23 @@ inline size_t read(SyncReadStream& stream, const MutableBufferSequence& buffers)
 }
 
 template <class SyncReadStream, class DynamicBuffer, class CompletionCondition, class = enable_if_t<is_dynamic_buffer_v<DynamicBuffer>>>
-inline size_t read(SyncReadStream& stream, DynamicBuffer&& b, CompletionCondition completion_condition, error_code& ec);
+inline size_t read(SyncReadStream& stream, DynamicBuffer&& b, CompletionCondition completion_condition, error_code& ec)
+{
+    decay_t<DynamicBuffer> buffer{ forward<DynamicBuffer>(b) };
+    ec = error_code{};
+    size_t total_transferred{ 0 };
+    size_t max_size{ completion_condition(ec, total_transferred) };
+    size_t bytes_available{ min(max(512, buffer.capacity() - buffer.size()), min(max_size, buffer.max_size() - buffer.size())) };
+    while (bytes_available > 0)
+    {
+        size_t bytes_transferred{ s.read_some(buffer.prepare(bytes_available), ec) };
+        buffer.commit(bytes_transferred);
+        total_transferred += bytes_transferred;
+        max_size = completion_condition(ec, total_transferred);
+        bytes_available = min(max(512, buffer.capacity() - buffer.size()), min(max_size, buffer.max_size() - buffer.size()));
+    }
+    return total_transferred;
+}
 template <class SyncReadStream, class DynamicBuffer, class = enable_if_t<is_dynamic_buffer_v<DynamicBuffer>>>
 inline size_t read(SyncReadStream& stream, DynamicBuffer&& b, error_code& ec)
 {
@@ -503,7 +661,23 @@ inline auto async_read(AsyncReadStream& stream, DynamicBuffer&& b, CompletionTok
 }
 
 template <class SyncWriteStream, class ConstBufferSequence, class CompletionCondition, class = enable_if_t<is_const_buffer_sequence_v<ConstBufferSequence>>>
-inline size_t write(SyncWriteStream& stream, const ConstBufferSequence& buffers, CompletionCondition completion_condition, error_code& ec);
+inline size_t write(SyncWriteStream& stream, const ConstBufferSequence& buffers, CompletionCondition completion_condition, error_code& ec)
+{
+    ec = error_code{};
+    _Consuming_buffers<const_buffer, ConstBufferSequence, decltype(buffer_sequence_begin(buffers))> tmp{ buffers };
+    while (!tmp.empty())
+    {
+        if (size_t max_size{ completion_condition(ec, tmp.total_consumed()) })
+        {
+            tmp.consume(stream.write_some(tmp.prepare(max_size), ec));
+        }
+        else
+        {
+            break;
+        }
+    }
+    return tmp.total_consumed();
+}
 template <class SyncWriteStream, class ConstBufferSequence, class = enable_if_t<is_const_buffer_sequence_v<ConstBufferSequence>>>
 inline size_t write(SyncWriteStream& stream, const ConstBufferSequence& buffers, error_code& ec)
 {
@@ -527,7 +701,13 @@ inline size_t write(SyncWriteStream& stream, const ConstBufferSequence& buffers)
 }
 
 template <class SyncWriteStream, class DynamicBuffer, class CompletionCondition, class = enable_if_t<is_dynamic_buffer_v<DynamicBuffer>>>
-inline size_t write(SyncWriteStream& stream, DynamicBuffer&& b, CompletionCondition completion_condition, error_code& ec);
+inline size_t write(SyncWriteStream& stream, DynamicBuffer&& b, CompletionCondition completion_condition, error_code& ec)
+{
+    decay_t<DynamicBuffer> buffer{ forward<DynamicBuffer>(b) };
+    size_t bytes_transferred{ write(stream, buffer.data(), completion_condition, ec) };
+    buffer.consume(bytes_transferred);
+    return bytes_transferred;
+}
 template <class SyncWriteStream, class DynamicBuffer, class = enable_if_t<is_dynamic_buffer_v<DynamicBuffer>>>
 inline size_t write(SyncWriteStream& stream, DynamicBuffer&& b, error_code& ec)
 {
@@ -566,8 +746,314 @@ inline auto async_write(AsyncWriteStream& stream, DynamicBuffer&& b, CompletionT
     return async_write(stream, forward<DynamicBuffer>(b), transfer_all{}, forward<CompletionToken>(token));
 }
 
+template <bool IsMutable>
+struct _Buffers_iterator_types_helper;
+
+template <>
+struct _Buffers_iterator_types_helper<false>
+{
+    using buffer_type = const_buffer;
+    template <class ByteType>
+    using byte_type = add_const_t<ByteType>;
+};
+
+template <>
+struct _Buffers_iterator_types_helper<true>
+{
+    using buffer_type = mutable_buffer;
+    template <class ByteType>
+    using byte_type = ByteType;
+};
+
+template <class BufferSequence, class ByteType>
+struct _Buffers_iterator_types
+{
+    constexpr bool is_mutable{ is_convertible_v<typename BufferSequence::value_type, mutable_buffer> };
+    using helper = _Buffers_iterator_types_helper<is_mutable>;
+    using buffer_type = typename helper::buffer_type;
+    using byte_type = typename helper::byte_type;
+    using const_iterator = typename BufferSequence::const_iterator;
+};
+
+template <class ByteType>
+struct _Buffers_iterator_types<mutable_buffer, ByteType>
+{
+    using buffer_type = mutable_buffer;
+    using byte_type = ByteType;
+    using const_iterator = const mutable_buffer*;
+};
+
+template <class ByteType>
+struct _Buffers_iterator_types<const_buffer, ByteType>
+{
+    using buffer_type = const_buffer;
+    using byte_type = ByteType;
+    using const_iterator = const const_buffer*;
+};
+
+template <class BufferSequence, class ByteType = char>
+class _Buffers_iterator
+{
+private:
+    using types_helper = _Buffers_iterator_types<BufferSequence, ByteType>;
+    using buffer_type = typename types_helper::buffer_type;
+    using buffer_sequence_iterator_type = typename types_helper::const_iterator;
+
+public:
+    using difference_type = ptrdiff_t;
+    using value_type = ByteType;
+    using pointer = typename types_helper::byte_type*;
+    using reference = typename types_helper::byte_type&;
+    using iterator_category = random_access_iterator_tag;
+
+    _Buffers_iterator() : current_buffer_(), current_buffer_position_(0), begin_(), current_(), end_(), position_(0) {}
+
+    static _Buffers_iterator begin(const BufferSequence& buffers)
+    {
+        _Buffers_iterator new_iter{};
+        new_iter.begin_ = buffer_sequence_begin(buffers);
+        new_iter.current_ = buffer_sequence_begin(buffers);
+        new_iter.end_ = buffer_sequence_end(buffers);
+        while (new_iter.current_ != new_iter.end_)
+        {
+            new_iter.current_buffer_ = *new_iter.current_;
+            if (new_iter.current_buffer_.size() > 0)
+                break;
+            ++new_iter.current_;
+        }
+        return new_iter;
+    }
+    static _Buffers_iterator end(const BufferSequence& buffers)
+    {
+        _Buffers_iterator new_iter;
+        new_iter.begin_ = buffer_sequence_begin(buffers);
+        new_iter.current_ = buffer_sequence_begin(buffers);
+        new_iter.end_ = buffer_sequence_end(buffers);
+        while (new_iter.current_ != new_iter.end_)
+        {
+            buffer_type buffer{ *new_iter.current_ };
+            new_iter.position_ += buffer.size();
+            ++new_iter.current_;
+        }
+        return new_iter;
+    }
+
+    reference operator*() const { return dereference(); }
+    pointer operator->() const { return addressof(dereference()); }
+    reference operator[](ptrdiff_t difference) const
+    {
+        _Buffers_iterator tmp{ *this };
+        tmp.advance(difference);
+        return *tmp;
+    }
+
+    _Buffers_iterator& operator++()
+    {
+        increment();
+        return *this;
+    }
+    _Buffers_iterator operator++(int)
+    {
+        _Buffers_iterator tmp{ *this };
+        ++(*this);
+        return tmp;
+    }
+
+    _Buffers_iterator& operator--()
+    {
+        decrement();
+        return *this;
+    }
+    _Buffers_iterator operator--(int)
+    {
+        _Buffers_iterator tmp{ *this };
+        --(*this);
+        return tmp;
+    }
+
+    _Buffers_iterator& operator+=(ptrdiff_t difference)
+    {
+        advance(difference);
+        return *this;
+    }
+    _Buffers_iterator& operator-=(ptrdiff_t difference)
+    {
+        advance(-difference);
+        return *this;
+    }
+
+    friend _Buffers_iterator operator+(const _Buffers_iterator& iter, ptrdiff_t difference)
+    {
+        _Buffers_iterator tmp{ iter };
+        tmp.advance(difference);
+        return tmp;
+    }
+    friend _Buffers_iterator operator+(ptrdiff_t difference, const _Buffers_iterator& iter)
+    {
+        _Buffers_iterator tmp{ iter };
+        tmp.advance(difference);
+        return tmp;
+    }
+    friend _Buffers_iterator operator-(const _Buffers_iterator& iter, ptrdiff_t difference)
+    {
+        _Buffers_iterator tmp{ iter };
+        tmp.advance(-difference);
+        return tmp;
+    }
+    friend ptrdiff_t operator-(const _Buffers_iterator& a, const _Buffers_iterator& b) { return b.distance_to(a); }
+
+    friend bool operator==(const _Buffers_iterator& a, const _Buffers_iterator& b) { return a.equal(b); }
+    friend bool operator!=(const _Buffers_iterator& a, const _Buffers_iterator& b) { return !a.equal(b); }
+
+    friend bool operator<(const _Buffers_iterator& a, const _Buffers_iterator& b) { return a.distance_to(b) > 0; }
+    friend bool operator<=(const _Buffers_iterator& a, const _Buffers_iterator& b) { return !(b < a); }
+    friend bool operator>(const _Buffers_iterator& a, const _Buffers_iterator& b) { return b < a; }
+    friend bool operator>=(const _Buffers_iterator& a, const _Buffers_iterator& b) { return !(a < b); }
+
+private:
+    reference dereference() const { return static_cast<pointer>(current_buffer_.data())[current_buffer_position_]; }
+    bool equal(const _Buffers_iterator& other) const { return position_ == other.position_; }
+    void increment()
+    {
+        ++position_;
+        ++current_buffer_position_;
+        if (current_buffer_position_ != current_buffer_.size())
+            return;
+        ++current_;
+        current_buffer_position_ = 0;
+        while (current_ != end_)
+        {
+            current_buffer_ = *current_;
+            if (current_buffer_.size() > 0)
+                return;
+            ++current_;
+        }
+    }
+    void decrement()
+    {
+        --position_;
+        if (current_buffer_position_ != 0)
+        {
+            --current_buffer_position_;
+            return;
+        }
+        buffer_sequence_iterator_type iter{ current_ };
+        while (iter != begin_)
+        {
+            --iter;
+            buffer_type buffer = *iter;
+            size_t buffer_size{ buffer.size() };
+            if (buffer_size > 0)
+            {
+                current_ = iter;
+                current_buffer_ = buffer;
+                current_buffer_position_ = buffer_size - 1;
+                return;
+            }
+        }
+    }
+    void advance(ptrdiff_t n)
+    {
+        if (n > 0)
+        {
+            for (;;)
+            {
+                ptrdiff_t current_buffer_balance{ current_buffer_.size() - current_buffer_position_ };
+                if (current_buffer_balance > n)
+                {
+                    position_ += n;
+                    current_buffer_position_ += n;
+                    return;
+                }
+                n -= current_buffer_balance;
+                position_ += current_buffer_balance;
+                if (++current_ == end_)
+                {
+                    current_buffer_ = buffer_type();
+                    current_buffer_position_ = 0;
+                    return;
+                }
+                current_buffer_ = *current_;
+                current_buffer_position_ = 0;
+            }
+        }
+        else if (n < 0)
+        {
+            size_t abs_n{ -n };
+            for (;;)
+            {
+                if (current_buffer_position_ >= abs_n)
+                {
+                    position_ -= abs_n;
+                    current_buffer_position_ -= abs_n;
+                    return;
+                }
+                abs_n -= current_buffer_position_;
+                position_ -= current_buffer_position_;
+                if (current_ == begin_)
+                {
+                    current_buffer_position_ = 0;
+                    return;
+                }
+                buffer_sequence_iterator_type iter{ current_ };
+                while (iter != begin_)
+                {
+                    --iter;
+                    buffer_type buffer{ *iter };
+                    size_t buffer_size{ buffer.size() };
+                    if (buffer_size > 0)
+                    {
+                        current_ = iter;
+                        current_buffer_ = buffer;
+                        current_buffer_position_ = buffer_size;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    ptrdiff_t distance_to(const _Buffers_iterator& other) const { return other.position_ - position_; }
+
+    buffer_type current_buffer_;
+    size_t current_buffer_position_;
+    buffer_sequence_iterator_type begin_, current_, end_;
+    size_t position_;
+};
+
 template <class SyncReadStream, class DynamicBuffer>
-inline size_t read_until(SyncReadStream& s, DynamicBuffer&& b, char delim, error_code& ec);
+inline size_t read_until(SyncReadStream& s, DynamicBuffer&& b, char delim, error_code& ec)
+{
+    decay_t<DynamicBuffer> buffer{ forward<DynamicBuffer>(b) };
+    size_t search_position{ 0 };
+    while (true)
+    {
+        using buffers_type = typename DynamicBuffer::const_buffers_type;
+        using iterator = _Buffers_iterator<buffers_type>;
+        buffers_type data_buffers{ buffer.data() };
+        iterator begin{ iterator::begin(data_buffers) };
+        iterator start_pos{ begin + search_position };
+        iterator end{ iterator::end(data_buffers) };
+        iterator iter = find(start_pos, end, delim);
+        if (iter != end)
+        {
+            ec = error_code{};
+            return iter - begin + 1;
+        }
+        else
+        {
+            search_position = end - begin;
+        }
+        if (buffer.size() == buffer.max_size())
+        {
+            ec = stream_errc::not_found;
+            return 0;
+        }
+        size_t bytes_to_read{ min(max < (512, buffer.capacity() - buffer.size()), min(65536, buffer.max_size() - buffer.size())) };
+        buffer.commit(s.read_some(buffer.prepare(bytes_to_read), ec));
+        if (ec)
+            return 0;
+    }
+}
 template <class SyncReadStream, class DynamicBuffer>
 inline size_t read_until(SyncReadStream& s, DynamicBuffer&& b, char delim)
 {

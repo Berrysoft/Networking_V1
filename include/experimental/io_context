@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include <experimental/executor>
+#include <limits>
 
 namespace std::experimental::net
 {
