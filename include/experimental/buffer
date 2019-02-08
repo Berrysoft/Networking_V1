@@ -1048,7 +1048,7 @@ inline size_t read_until(SyncReadStream& s, DynamicBuffer&& b, char delim, error
             ec = stream_errc::not_found;
             return 0;
         }
-        size_t bytes_to_read{ min(max < (512, buffer.capacity() - buffer.size()), min(65536, buffer.max_size() - buffer.size())) };
+        size_t bytes_to_read{ min(max(512, buffer.capacity() - buffer.size()), min(65536, buffer.max_size() - buffer.size())) };
         buffer.commit(s.read_some(buffer.prepare(bytes_to_read), ec));
         if (ec)
             return 0;
