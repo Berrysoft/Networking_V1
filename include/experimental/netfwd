@@ -2,6 +2,7 @@
 #define NET_NETFWD
 
 #include <chrono>
+#include <system_error>
 
 namespace std
 {
@@ -9,6 +10,12 @@ namespace experimental::net
 {
 inline namespace v1
 {
+inline void _Check_error_code(error_code& ec, const char* what)
+{
+    if (ec)
+        throw system_error{ ec, what };
+}
+
 class execution_context;
 
 template <class T, class Executor>

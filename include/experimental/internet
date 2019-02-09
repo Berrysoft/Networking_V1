@@ -1,8 +1,12 @@
 #ifndef NET_INTERNET
 #define NET_INTERNET
 
+#include <arpa/inet.h>
 #include <array>
+#include <cstring>
+#include <experimental/netfwd>
 #include <functional>
+#include <netinet/in.h>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -59,32 +63,11 @@ struct v4_mapped_t
 };
 constexpr v4_mapped_t v4_mapped{};
 
-class address
+struct bad_address_cast : bad_cast
 {
-public:
-    constexpr address() noexcept;
-    constexpr address(const address& a) noexcept;
-    constexpr address(const address_v4& a) noexcept;
-    constexpr address(const address_v6& a) noexcept;
-
-    address& operator=(const address& a) noexcept;
-    address& operator=(const address_v4& a) noexcept;
-    address& operator=(const address_v6& a) noexcept;
-
-    constexpr bool is_v4() const noexcept;
-    constexpr bool is_v6() const noexcept;
-    constexpr address_v4 to_v4() const;
-    constexpr address_v6 to_v6() const;
-    constexpr bool is_unspecified() const noexcept;
-    constexpr bool is_loopback() const noexcept;
-    constexpr bool is_multicast() const noexcept;
-    template <class Allocator = allocator<char>>
-    basic_string<char, char_traits<char>, Allocator> to_string(const Allocator& a = {}) const;
-
-private:
-    address_v4 v4_;
-    address_v6 v6_;
+    bad_address_cast() noexcept : bad_cast() {}
 };
+
 class address_v4
 {
 public:
@@ -97,25 +80,94 @@ public:
         }
     };
 
-    constexpr address_v4() noexcept;
-    constexpr address_v4(const address_v4& a) noexcept;
-    constexpr address_v4(const bytes_type& bytes);
-    explicit constexpr address_v4(uint_type val);
+    constexpr address_v4() noexcept : addr_() { addr_.s_addr = 0; }
+    constexpr address_v4(const address_v4& a) noexcept : addr_(a.addr_) {}
+    constexpr address_v4(const bytes_type& bytes) : addr_() { copy(bytes.begin(), bytes.end(), (unsigned char*)&addr_.s_addr); }
+    explicit constexpr address_v4(uint_type val) : addr_() { addr_.s_addr = ::htonl(val); }
 
-    address_v4& operator=(const address_v4& a) noexcept;
+    address_v4& operator=(const address_v4& a) noexcept
+    {
+        addr_ = a.addr_;
+        return *this;
+    }
 
-    constexpr bool is_unspecified() const noexcept;
-    constexpr bool is_loopback() const noexcept;
-    constexpr bool is_multicast() const noexcept;
-    constexpr bytes_type to_bytes() const noexcept;
-    constexpr uint_type to_uint() const noexcept;
+    constexpr bytes_type to_bytes() const noexcept
+    {
+        bytes_type bytes{};
+        copy((unsigned char*)&addr_.s_addr, (unsigned char*)&addr_.s_addr + sizeof(uint_type), bytes.begin());
+        return bytes;
+    }
+    constexpr uint_type to_uint() const noexcept { return ::ntohl(addr_.s_addr); }
+    constexpr bool is_unspecified() const noexcept { return to_uint() == 0; }
+    constexpr bool is_loopback() const noexcept { return (to_uint() & 0xFF000000) == 0x7F000000; }
+    constexpr bool is_multicast() const noexcept { return (to_uint() & 0xF0000000) == 0xE0000000; }
     template <class Allocator = allocator<char>>
-    basic_string<char, char_traits<char>, Allocator> to_string(const Allocator& a = {}) const;
+    basic_string<char, char_traits<char>, Allocator> to_string(const Allocator& a = {}) const
+    {
+        char addr_str[256];
+        const char* r{ ::inet_ntop(AF_INET, &addr_, addr_str, 256) };
+        if (r)
+            return basic_string{ r, a };
+        else
+            return basic_string<char>{ a };
+    }
 
-    static constexpr address_v4 any() noexcept;
-    static constexpr address_v4 loopback() noexcept;
-    static constexpr address_v4 broadcast() noexcept;
+    static constexpr address_v4 any() noexcept { return address_v4{}; }
+    static constexpr address_v4 loopback() noexcept { return address_v4{ 0x7F000001 }; }
+    static constexpr address_v4 broadcast() noexcept { return address_v4{ 0xFFFFFFFF }; }
+
+    friend constexpr bool operator==(const address_v4& a, const address_v4& b) noexcept { return a.addr_.s_addr == b.addr_.s_addr; }
+    friend constexpr bool operator!=(const address_v4& a, const address_v4& b) noexcept { return !(a == b); }
+    friend constexpr bool operator<(const address_v4& a, const address_v4& b) noexcept { return a.to_uint() < b.to_uint(); }
+    friend constexpr bool operator>(const address_v4& a, const address_v4& b) noexcept { return a.to_uint() > b.to_uint(); }
+    friend constexpr bool operator<=(const address_v4& a, const address_v4& b) noexcept { return a.to_uint() <= b.to_uint(); }
+    friend constexpr bool operator>=(const address_v4& a, const address_v4& b) noexcept { return a.to_uint() >= b.to_uint(); }
+
+private:
+    ::in_addr addr_;
 };
+
+template <class CharT, class Traits>
+inline basic_ostream<CharT, Traits>& operator<<(basic_ostream<CharT, Traits>& s, const address_v4& a)
+{
+    return s << a.to_string().c_str();
+}
+
+constexpr address_v4 make_address_v4(const address_v4::bytes_type& bytes) { return address_v4{ bytes }; }
+constexpr address_v4 make_address_v4(address_v4::uint_type val) { return address_v4{ val }; }
+constexpr address_v4 make_address_v4(v4_mapped_t, const address_v6& a)
+{
+    if (!a.is_v4_mapped())
+        throw bad_address_cast{};
+    address_v6::bytes_type v6b{ a.to_bytes() };
+    address_v4::bytes_type v4b{ v6b[12], v6b[13], v6b[14], v6b[15] };
+    return address_v4{ v4b };
+}
+address_v4 make_address_v4(const char*, error_code&) noexcept;
+inline address_v4 make_address_v4(const char* str)
+{
+    error_code ec{};
+    auto r{ make_address_v4(str, ec) };
+    _Check_error_code(ec, __func__);
+    return r;
+}
+inline address_v4 make_address_v4(const string& str, error_code& ec) noexcept { return make_address_v4(str.c_str(), ec); }
+inline address_v4 make_address_v4(const string& str)
+{
+    error_code ec{};
+    auto r{ make_address_v4(str, ec) };
+    _Check_error_code(ec, __func__);
+    return r;
+}
+inline address_v4 make_address_v4(string_view str, error_code& ec) noexcept { return make_address_v4(static_cast<string>(str), ec); }
+inline address_v4 make_address_v4(string_view str)
+{
+    error_code ec{};
+    auto r{ make_address_v4(str, ec) };
+    _Check_error_code(ec, __func__);
+    return r;
+}
+
 class address_v6
 {
 public:
@@ -126,91 +178,290 @@ public:
         {
         }
     };
-    constexpr address_v6() noexcept;
-    constexpr address_v6(const address_v6& a) noexcept;
-    constexpr address_v6(const bytes_type& bytes, scope_id_type scope = 0);
+    constexpr address_v6() noexcept : addr_(), scope_id_(0) {}
+    constexpr address_v6(const address_v6& a) noexcept : addr_(a.addr_), scope_id_(a.scope_id_) {}
+    constexpr address_v6(const bytes_type& bytes, scope_id_type scope = 0) : addr_(), scope_id_(scope) { copy(bytes.begin(), bytes.end(), (unsigned char*)addr_.s6_addr); }
 
-    address_v6& operator=(const address_v6& a) noexcept;
+    address_v6& operator=(const address_v6& a) noexcept
+    {
+        addr_ = a.addr_;
+        scope_id_ = a.scope_id_;
+        return *this;
+    }
 
-    void scope_id(scope_id_type id) noexcept;
-    constexpr scope_id_type scope_id() const noexcept;
-    constexpr bool is_unspecified() const noexcept;
-    constexpr bool is_loopback() const noexcept;
-    constexpr bool is_multicast() const noexcept;
-    constexpr bool is_link_local() const noexcept;
-    constexpr bool is_site_local() const noexcept;
-    constexpr bool is_v4_mapped() const noexcept;
-    constexpr bool is_multicast_node_local() const noexcept;
-    constexpr bool is_multicast_link_local() const noexcept;
-    constexpr bool is_multicast_site_local() const noexcept;
-    constexpr bool is_multicast_org_local() const noexcept;
-    constexpr bool is_multicast_global() const noexcept;
-    constexpr bytes_type to_bytes() const noexcept;
+    void scope_id(scope_id_type id) noexcept { scope_id_ = id; }
+    constexpr scope_id_type scope_id() const noexcept { return scope_id_; }
+    constexpr bool is_unspecified() const noexcept
+    {
+        return (addr_.s6_addr[0] == 0) &&
+               (addr_.s6_addr[1] == 0) &&
+               (addr_.s6_addr[2] == 0) &&
+               (addr_.s6_addr[3] == 0) &&
+               (addr_.s6_addr[4] == 0) &&
+               (addr_.s6_addr[5] == 0) &&
+               (addr_.s6_addr[6] == 0) &&
+               (addr_.s6_addr[7] == 0) &&
+               (addr_.s6_addr[8] == 0) &&
+               (addr_.s6_addr[9] == 0) &&
+               (addr_.s6_addr[10] == 0) &&
+               (addr_.s6_addr[11] == 0) &&
+               (addr_.s6_addr[12] == 0) &&
+               (addr_.s6_addr[13] == 0) &&
+               (addr_.s6_addr[14] == 0) &&
+               (addr_.s6_addr[15] == 0);
+    }
+    constexpr bool is_loopback() const noexcept
+    {
+        return (addr_.s6_addr[0] == 0) &&
+               (addr_.s6_addr[1] == 0) &&
+               (addr_.s6_addr[2] == 0) &&
+               (addr_.s6_addr[3] == 0) &&
+               (addr_.s6_addr[4] == 0) &&
+               (addr_.s6_addr[5] == 0) &&
+               (addr_.s6_addr[6] == 0) &&
+               (addr_.s6_addr[7] == 0) &&
+               (addr_.s6_addr[8] == 0) &&
+               (addr_.s6_addr[9] == 0) &&
+               (addr_.s6_addr[10] == 0) &&
+               (addr_.s6_addr[11] == 0) &&
+               (addr_.s6_addr[12] == 0) &&
+               (addr_.s6_addr[13] == 0) &&
+               (addr_.s6_addr[14] == 0) &&
+               (addr_.s6_addr[15] == 1);
+    }
+    constexpr bool is_multicast() const noexcept { return (addr_.s6_addr[0] == 0xff); }
+    constexpr bool is_link_local() const noexcept { return (addr_.s6_addr[0] == 0xfe) && ((addr_.s6_addr[1] & 0xc0) == 0x80); }
+    constexpr bool is_site_local() const noexcept { return (addr_.s6_addr[0] == 0xfe) && ((addr_.s6_addr[1] & 0xc0) == 0xc0); }
+    constexpr bool is_v4_mapped() const noexcept
+    {
+        return (addr_.s6_addr[0] == 0) &&
+               (addr_.s6_addr[1] == 0) &&
+               (addr_.s6_addr[2] == 0) &&
+               (addr_.s6_addr[3] == 0) &&
+               (addr_.s6_addr[4] == 0) &&
+               (addr_.s6_addr[5] == 0) &&
+               (addr_.s6_addr[6] == 0) &&
+               (addr_.s6_addr[7] == 0) &&
+               (addr_.s6_addr[8] == 0) &&
+               (addr_.s6_addr[9] == 0) &&
+               (addr_.s6_addr[10] == 0xff) &&
+               (addr_.s6_addr[11] == 0xff);
+    }
+    constexpr bool is_multicast_node_local() const noexcept { return (addr_.s6_addr[0] == 0xff) && ((addr_.s6_addr[1] & 0x0f) == 0x01); }
+    constexpr bool is_multicast_link_local() const noexcept { return (addr_.s6_addr[0] == 0xff) && ((addr_.s6_addr[1] & 0x0f) == 0x02); }
+    constexpr bool is_multicast_site_local() const noexcept { return (addr_.s6_addr[0] == 0xff) && ((addr_.s6_addr[1] & 0x0f) == 0x05); }
+    constexpr bool is_multicast_org_local() const noexcept { return (addr_.s6_addr[0] == 0xff) && ((addr_.s6_addr[1] & 0x0f) == 0x08); }
+    constexpr bool is_multicast_global() const noexcept { return (addr_.s6_addr[0] == 0xff) && ((addr_.s6_addr[1] & 0x0f) == 0x0e); }
+    constexpr bytes_type to_bytes() const noexcept
+    {
+        bytes_type bytes;
+        copy((unsigned char*)addr_.s6_addr, (unsigned char*)addr_.s6_addr + 16, bytes.begin());
+        return bytes;
+    }
     template <class Allocator = allocator<char>>
-    basic_string<char, char_traits<char>, Allocator> to_string(const Allocator& a = {}) const;
+    basic_string<char, char_traits<char>, Allocator> to_string(const Allocator& a = {}) const
+    {
+        char addr_str[256];
+        const char* r{ ::inet_ntop(AF_INET6, &addr_, addr_str, 256) };
+        if (r)
+            return basic_string{ r, a };
+        else
+            return basic_string<char>{ a };
+    }
 
-    static constexpr address_v6 any() noexcept;
-    static constexpr address_v6 loopback() noexcept;
+    static constexpr address_v6 any() noexcept { return address_v6{}; }
+    static constexpr address_v6 loopback() noexcept
+    {
+        address_v6 tmp;
+        tmp.addr_.s6_addr[15] = 1;
+        return tmp;
+    }
+
+    friend constexpr bool operator==(const address_v6& a, const address_v6& b) noexcept
+    {
+        return memcmp(&a.addr_, &b.addr_, sizeof(::in6_addr)) == 0 && a.scope_id_ == b.scope_id_;
+    }
+    friend constexpr bool operator!=(const address_v6& a, const address_v6& b) noexcept { return !(a == b); }
+    friend constexpr bool operator<(const address_v6& a, const address_v6& b) noexcept
+    {
+        int memcmp_result = memcmp(&a.addr_, &b.addr_, sizeof(::in6_addr));
+        if (memcmp_result < 0)
+            return true;
+        if (memcmp_result > 0)
+            return false;
+        return a.scope_id_ < b.scope_id_;
+    }
+    friend constexpr bool operator>(const address_v6& a, const address_v6& b) noexcept { return b < a; }
+    friend constexpr bool operator<=(const address_v6& a, const address_v6& b) noexcept { return !(b < a); }
+    friend constexpr bool operator>=(const address_v6& a, const address_v6& b) noexcept { return !(a < b); }
+
+private:
+    ::in6_addr addr_;
+    unsigned long scope_id_;
 };
 
-struct bad_address_cast : bad_cast
+template <class CharT, class Traits>
+inline basic_ostream<CharT, Traits>& operator<<(basic_ostream<CharT, Traits>& s, const address_v6& a)
 {
-    bad_address_cast() noexcept : bad_cast() {}
+    return s << a.to_string().c_str();
+}
+
+constexpr address_v6 make_address_v6(const address_v6::bytes_type& bytes, scope_id_type scope = 0) { return address_v6{ bytes, scope }; }
+constexpr address_v6 make_address_v6(v4_mapped_t, const address_v4& a) noexcept
+{
+    address_v4::bytes_type v4b{ a.to_bytes() };
+    address_v6::bytes_type v6b{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, v4b[0], v4b[1], v4b[2], v4b[3] };
+    return address_v6{ v6b };
+}
+address_v6 make_address_v6(const char*, error_code&) noexcept;
+inline address_v6 make_address_v6(const char* str)
+{
+    error_code ec{};
+    auto r{ make_address_v6(str, ec) };
+    _Check_error_code(ec, __func__);
+    return r;
+}
+inline address_v6 make_address_v6(const string& str, error_code& ec) noexcept { return make_address_v6(str.c_str(), ec); }
+inline address_v6 make_address_v6(const string& str)
+{
+    error_code ec{};
+    auto r{ make_address_v6(str, ec) };
+    _Check_error_code(ec, __func__);
+    return r;
+}
+inline address_v6 make_address_v6(string_view str, error_code& ec) noexcept { return make_address_v6(static_cast<string>(str), ec); }
+inline address_v6 make_address_v6(string_view str)
+{
+    error_code ec{};
+    auto r{ make_address_v6(str, ec) };
+    _Check_error_code(ec, __func__);
+    return r;
+}
+
+class address
+{
+public:
+    constexpr address() noexcept : type_(ipv4), v4_(), v6_() {}
+    constexpr address(const address& a) noexcept : type_(a.type_), v4_(a.v4_), v6_(a.v6_) {}
+    constexpr address(const address_v4& a) noexcept : type_(ipv4), v4_(a), v6_() {}
+    constexpr address(const address_v6& a) noexcept : type_(ipv6), v4_(), v6_(a) {}
+
+    address& operator=(const address& a) noexcept
+    {
+        type_ = a.type_;
+        v4_ = a.v4_;
+        v6_ = a.v6_;
+        return *this;
+    }
+    address& operator=(const address_v4& a) noexcept
+    {
+        type_ = ipv4;
+        v4_ = a;
+        v6_ = {};
+        return *this;
+    }
+    address& operator=(const address_v6& a) noexcept
+    {
+        type_ = ipv6;
+        v4_ = {};
+        v6_ = a;
+        return *this;
+    }
+
+    constexpr bool is_v4() const noexcept { return type_ == ipv4; }
+    constexpr bool is_v6() const noexcept { return type_ == ipv6; }
+    constexpr address_v4 to_v4() const
+    {
+        if (type_ != ipv4)
+            throw bad_address_cast{};
+        else
+            return v4_;
+    }
+    constexpr address_v6 to_v6() const
+    {
+        if (type_ != ipv6)
+            throw bad_address_cast{};
+        else
+            return v6_;
+    }
+    constexpr bool is_unspecified() const noexcept { return type_ == ipv4 ? v4_.is_unspecified() : v6_.is_unspecified(); }
+    constexpr bool is_loopback() const noexcept { return type_ == ipv4 ? v4_.is_loopback() : v6_.is_loopback(); }
+    constexpr bool is_multicast() const noexcept { return type_ == ipv4 ? v4_.is_multicast() : v6_.is_multicast(); }
+    template <class Allocator = allocator<char>>
+    basic_string<char, char_traits<char>, Allocator> to_string(const Allocator& a = {}) const
+    {
+        return type_ == ipv4 ? v4_.to_string(a) : v6_.to_string(a);
+    }
+
+    friend constexpr bool operator==(const address& a, const address& b) noexcept
+    {
+        if (a.type_ != b.type_)
+            return false;
+        else
+        {
+            if (a.type_ == address::ipv4)
+                return a.v4_ == b.v4_;
+            else
+                return a.v6_ == b.v6_;
+        }
+    }
+    friend constexpr bool operator!=(const address& a, const address& b) noexcept { return !(a == b); }
+    friend constexpr bool operator<(const address& a, const address& b) noexcept
+    {
+        if (a.type_ != b.type_)
+            return a.type_ < b.type_;
+        else
+        {
+            if (a.type_ == address::ipv4)
+                return a.v4_ < b.v4_;
+            else
+                return a.v6_ > b.v6_;
+        }
+    }
+    friend constexpr bool operator>(const address& a, const address& b) noexcept { return b < a; }
+    friend constexpr bool operator<=(const address& a, const address& b) noexcept { return !(b < a); }
+    friend constexpr bool operator>=(const address& a, const address& b) noexcept { return !(a < b); }
+
+private:
+    enum
+    {
+        ipv4,
+        ipv6
+    } type_;
+    address_v4 v4_;
+    address_v6 v6_;
 };
 
-constexpr bool operator==(const address&, const address&) noexcept;
-constexpr bool operator!=(const address&, const address&) noexcept;
-constexpr bool operator<(const address&, const address&) noexcept;
-constexpr bool operator>(const address&, const address&) noexcept;
-constexpr bool operator<=(const address&, const address&) noexcept;
-constexpr bool operator>=(const address&, const address&) noexcept;
+template <class CharT, class Traits>
+inline basic_ostream<CharT, Traits>& operator<<(basic_ostream<CharT, Traits>& s, const address& a)
+{
+    return s << a.to_string().c_str();
+}
 
-constexpr bool operator==(const address_v4&, const address_v4&) noexcept;
-constexpr bool operator!=(const address_v4&, const address_v4&) noexcept;
-constexpr bool operator<(const address_v4&, const address_v4&) noexcept;
-constexpr bool operator>(const address_v4&, const address_v4&) noexcept;
-constexpr bool operator<=(const address_v4&, const address_v4&) noexcept;
-constexpr bool operator>=(const address_v4&, const address_v4&) noexcept;
-
-constexpr bool operator==(const address_v6&, const address_v6&) noexcept;
-constexpr bool operator!=(const address_v6&, const address_v6&) noexcept;
-constexpr bool operator<(const address_v6&, const address_v6&) noexcept;
-constexpr bool operator>(const address_v6&, const address_v6&) noexcept;
-constexpr bool operator<=(const address_v6&, const address_v6&) noexcept;
-constexpr bool operator>=(const address_v6&, const address_v6&) noexcept;
-
-address make_address(const char*);
 address make_address(const char*, error_code&) noexcept;
-address make_address(const string&);
+inline address make_address(const char* str)
+{
+    error_code ec{};
+    auto r{ make_address(str, ec) };
+    _Check_error_code(ec, __func__);
+    return r;
+}
 address make_address(const string&, error_code&) noexcept;
-address make_address(string_view);
+inline address make_address(const string& str)
+{
+    error_code ec{};
+    auto r{ make_address(str, ec) };
+    _Check_error_code(ec, __func__);
+    return r;
+}
 address make_address(string_view, error_code&) noexcept;
-
-constexpr address_v4 make_address_v4(const address_v4::bytes_type&);
-constexpr address_v4 make_address_v4(address_v4::uint_type);
-constexpr address_v4 make_address_v4(v4_mapped_t, const address_v6&);
-address_v4 make_address_v4(const char*);
-address_v4 make_address_v4(const char*, error_code&) noexcept;
-address_v4 make_address_v4(const string&);
-address_v4 make_address_v4(const string&, error_code&) noexcept;
-address_v4 make_address_v4(string_view);
-address_v4 make_address_v4(string_view, error_code&) noexcept;
-
-constexpr address_v6 make_address_v6(const address_v6::bytes_type&, scope_id_type = 0);
-constexpr address_v6 make_address_v6(v4_mapped_t, const address_v4&) noexcept;
-address_v6 make_address_v6(const char*);
-address_v6 make_address_v6(const char*, error_code&) noexcept;
-address_v6 make_address_v6(const string&);
-address_v6 make_address_v6(const string&, error_code&) noexcept;
-address_v6 make_address_v6(string_view);
-address_v6 make_address_v6(string_view, error_code&) noexcept;
-
-template <class CharT, class Traits>
-basic_ostream<CharT, Traits>& operator<<(basic_ostream<CharT, Traits>&, const address&);
-template <class CharT, class Traits>
-basic_ostream<CharT, Traits>& operator<<(basic_ostream<CharT, Traits>&, const address_v4&);
-template <class CharT, class Traits>
-basic_ostream<CharT, Traits>& operator<<(basic_ostream<CharT, Traits>&, const address_v6&);
+inline address make_address(string_view str)
+{
+    error_code ec{};
+    auto r{ make_address(str, ec) };
+    _Check_error_code(ec, __func__);
+    return r;
+}
 
 template <class>
 class basic_address_iterator;

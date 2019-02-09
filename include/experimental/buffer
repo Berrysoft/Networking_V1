@@ -202,7 +202,7 @@ inline size_t buffer_copy(const MutableBufferSequence& dest, const ConstBufferSe
     size_t r{ 0 };
     while (begin1 != end1 && begin2 != end2 && max_size)
     {
-        size_t n{ min(min(d.size(), s.size()), max_size) };
+        size_t n{ min({ d.size(), s.size(), max_size }) };
         copy(s.data(), s.data() + n, d.data());
         if ((!((s += n).size())) && ++begin2)
         {
@@ -557,12 +557,6 @@ private:
     size_t next_elem_;
     size_t next_elem_offset_;
 };
-
-inline void _Check_error_code(error_code& ec, const char* what)
-{
-    if (ec)
-        throw system_error{ ec, what };
-}
 
 template <class SyncReadStream, class MutableBufferSequence, class CompletionCondition, class = enable_if_t<is_mutable_buffer_sequence_v<MutableBufferSequence>>>
 inline size_t read(SyncReadStream& stream, const MutableBufferSequence& buffers, CompletionCondition completion_condition, error_code& ec)
@@ -956,7 +950,7 @@ private:
     {
         if (n > 0)
         {
-            for (;;)
+            while (true)
             {
                 ptrdiff_t current_buffer_balance{ current_buffer_.size() - current_buffer_position_ };
                 if (current_buffer_balance > n)
@@ -980,7 +974,7 @@ private:
         else if (n < 0)
         {
             size_t abs_n{ -n };
-            for (;;)
+            while (true)
             {
                 if (current_buffer_position_ >= abs_n)
                 {
@@ -1062,8 +1056,73 @@ inline size_t read_until(SyncReadStream& s, DynamicBuffer&& b, char delim)
     _Check_error_code(ec, __func__);
     return r;
 }
+
+template <typename Iterator1, typename Iterator2>
+pair<Iterator1, bool> _Partial_search(Iterator1 first1, Iterator1 last1, Iterator2 first2, Iterator2 last2)
+{
+    for (Iterator1 iter1{ first1 }; iter1 != last1; ++iter1)
+    {
+        Iterator1 test_iter1{ iter1 };
+        Iterator2 test_iter2{ first2 };
+        for (;; ++test_iter1, ++test_iter2)
+        {
+            if (test_iter2 == last2)
+                return make_pair(iter1, true);
+            if (test_iter1 == last1)
+            {
+                if (test_iter2 != first2)
+                    return make_pair(iter1, false);
+                else
+                    break;
+            }
+            if (*test_iter1 != *test_iter2)
+                break;
+        }
+    }
+    return make_pair(last1, false);
+}
+
 template <class SyncReadStream, class DynamicBuffer>
-inline size_t read_until(SyncReadStream& s, DynamicBuffer&& b, string_view delim, error_code& ec);
+inline size_t read_until(SyncReadStream& s, DynamicBuffer&& b, string_view delim, error_code& ec)
+{
+    decay_t<DynamicBuffer> buffer{ forward<DynamicBuffer>(b) };
+    size_t search_position{ 0 };
+    while (true)
+    {
+        using buffers_type = typename DynamicBuffer::const_buffers_type;
+        using iterator = _Buffers_iterator<buffers_type>;
+        buffers_type data_buffers{ buffer.data() };
+        iterator begin{ iterator::begin(data_buffers) };
+        iterator start_pos{ begin + search_position };
+        iterator end{ iterator::end(data_buffers) };
+        pair<iterator, bool> result = _Partial_search(start_pos, end, delim.begin(), delim.end());
+        if (result.first != end)
+        {
+            if (result.second)
+            {
+                ec = error_code{};
+                return result.first - begin + delim.length();
+            }
+            else
+            {
+                search_position = result.first - begin;
+            }
+        }
+        else
+        {
+            search_position = end - begin;
+        }
+        if (buffer.size() == buffer.max_size())
+        {
+            ec = stream_errc::not_found;
+            return 0;
+        }
+        size_t bytes_to_read{ min(max(512, buffer.capacity() - buffer.size()), min(65536, buffer.max_size() - buffer.size())) };
+        buffer.commit(s.read_some(buffer.prepare(bytes_to_read), ec));
+        if (ec)
+            return 0;
+    }
+}
 template <class SyncReadStream, class DynamicBuffer>
 inline size_t read_until(SyncReadStream& s, DynamicBuffer&& b, string_view delim)
 {
