@@ -7,6 +7,7 @@
 #include <experimental/netfwd>
 #include <functional>
 #include <netinet/in.h>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -296,6 +297,8 @@ public:
     friend constexpr bool operator>=(const address_v6& a, const address_v6& b) noexcept { return !(a < b); }
 
 private:
+    friend class basic_address_iterator<address_v6>;
+
     ::in6_addr addr_;
     unsigned long scope_id_;
 };
@@ -446,7 +449,7 @@ inline address make_address(const char* str)
     _Check_error_code(ec, __func__);
     return r;
 }
-address make_address(const string&, error_code&) noexcept;
+inline address make_address(const string& str, error_code& ec) noexcept { return make_address(str.c_str(), ec); }
 inline address make_address(const string& str)
 {
     error_code ec{};
@@ -454,7 +457,7 @@ inline address make_address(const string& str)
     _Check_error_code(ec, __func__);
     return r;
 }
-address make_address(string_view, error_code&) noexcept;
+inline address make_address(string_view str, error_code& ec) noexcept { return make_address(static_cast<string>(str), ec); }
 inline address make_address(string_view str)
 {
     error_code ec{};
@@ -465,53 +468,355 @@ inline address make_address(string_view str)
 
 template <class>
 class basic_address_iterator;
+
 template <>
-class basic_address_iterator<address_v4>;
+class basic_address_iterator<address_v4>
+{
+public:
+    using value_type = address_v4;
+    using difference_type = ptrdiff_t;
+    using pointer = const address_v4*;
+    using reference = const address_v4&;
+    using iterator_category = input_iterator_tag;
+
+    basic_address_iterator(const address_v4& a) noexcept : address_(a) {}
+
+    reference operator*() const noexcept { return address_; }
+    pointer operator->() const noexcept { return addressof(address_); }
+    basic_address_iterator& operator++() noexcept;
+    basic_address_iterator operator++(int) noexcept
+    {
+        basic_address_iterator tmp{ *this };
+        ++(*this);
+        return tmp;
+    }
+    basic_address_iterator& operator--() noexcept;
+    basic_address_iterator operator--(int) noexcept
+    {
+        basic_address_iterator tmp{ *this };
+        --(*this);
+        return tmp;
+    }
+
+    friend bool operator==(const basic_address_iterator& a, const basic_address_iterator& b) { return a.address_ == b.address_; }
+    friend bool operator!=(const basic_address_iterator& a, const basic_address_iterator& b) { return a.address_ != b.address_; }
+
+private:
+    address_v4 address_;
+};
+
 using address_v4_iterator = basic_address_iterator<address_v4>;
+
 template <>
-class basic_address_iterator<address_v6>;
+class basic_address_iterator<address_v6>
+{
+public:
+    using value_type = address_v6;
+    using difference_type = ptrdiff_t;
+    using pointer = const address_v6*;
+    using reference = const address_v6&;
+    using iterator_category = input_iterator_tag;
+
+    basic_address_iterator(const address_v6& a) noexcept : address_(a) {}
+
+    reference operator*() const noexcept { return address_; }
+    pointer operator->() const noexcept { return addressof(address_); }
+    basic_address_iterator& operator++() noexcept;
+    basic_address_iterator operator++(int) noexcept
+    {
+        basic_address_iterator tmp{ *this };
+        ++(*this);
+        return tmp;
+    }
+    basic_address_iterator& operator--() noexcept;
+    basic_address_iterator operator--(int) noexcept
+    {
+        basic_address_iterator tmp{ *this };
+        --(*this);
+        return tmp;
+    }
+
+    friend bool operator==(const basic_address_iterator& a, const basic_address_iterator& b) { return a.address_ == b.address_; }
+    friend bool operator!=(const basic_address_iterator& a, const basic_address_iterator& b) { return a.address_ != b.address_; }
+
+private:
+    address_v6 address_;
+};
+
 using address_v6_iterator = basic_address_iterator<address_v6>;
 
 template <class>
 class basic_address_range;
+
 template <>
-class basic_address_range<address_v4>;
+class basic_address_range<address_v4>
+{
+public:
+    using iterator = basic_address_iterator<address_v4>;
+
+    basic_address_range() noexcept : begin_({}), end_({}) {}
+    basic_address_range(const address_v4& first, const address_v4& last) noexcept : begin_(first), end_(last) {}
+
+    iterator begin() const noexcept { return begin_; }
+    iterator end() const noexcept { return end_; }
+    bool empty() const noexcept { return size() == 0; }
+    size_t size() const noexcept { return end_->to_uint() - begin_->to_uint(); }
+    iterator find(const address_v4& addr) const noexcept { return addr >= *begin_ && addr < *end_ ? iterator{ addr } : end_; }
+
+private:
+    iterator begin_;
+    iterator end_;
+};
+
 using address_v4_range = basic_address_range<address_v4>;
+
 template <>
-class basic_address_range<address_v6>;
+class basic_address_range<address_v6>
+{
+public:
+    using iterator = basic_address_iterator<address_v6>;
+
+    basic_address_range() noexcept : begin_({}), end_({}) {}
+    basic_address_range(const address_v6& first, const address_v6& last) noexcept : begin_(first), end_(last) {}
+    basic_address_range(iterator begin, iterator end) : begin_(begin), end_(end) {}
+
+    iterator begin() const noexcept { return begin_; }
+    iterator end() const noexcept { return end_; }
+    bool empty() const noexcept { return begin_ == end_; }
+    iterator find(const address_v6& addr) const noexcept { return addr >= *begin_ && addr < *end_ ? iterator{ addr } : end_; }
+
+private:
+    iterator begin_;
+    iterator end_;
+};
+
 using address_v6_range = basic_address_range<address_v6>;
 
-class network_v4;
-class network_v6;
+class network_v4
+{
+public:
+    constexpr network_v4() noexcept : address_(), prefix_length_(0) {}
+    constexpr network_v4(const address_v4& addr, int prefix_len) : address_(addr), prefix_length_(prefix_len)
+    {
+        if (prefix_len < 0 || prefix_len > 32)
+            throw out_of_range{ "prefix length too large" };
+    }
+    constexpr network_v4(const address_v4& addr, const address_v4& mask) : address_(addr), prefix_length_(0)
+    {
+        address_v4::bytes_type mask_bytes{ mask.to_bytes() };
+        bool finished = false;
+        for (size_t i{ 0 }; i < mask_bytes.size(); ++i)
+        {
+            if (finished)
+            {
+                if (mask_bytes[i])
+                {
+                    throw invalid_argument{ "non-contiguous netmask" };
+                }
+                continue;
+            }
+            else
+            {
+                switch (mask_bytes[i])
+                {
+                case 255:
+                    prefix_length_ += 8;
+                    break;
+                case 254: // prefix_length_ += 7
+                    ++prefix_length_;
+                case 252: // prefix_length_ += 6
+                    ++prefix_length_;
+                case 248: // prefix_length_ += 5
+                    ++prefix_length_;
+                case 240: // prefix_length_ += 4
+                    ++prefix_length_;
+                case 224: // prefix_length_ += 3
+                    ++prefix_length_;
+                case 192: // prefix_length_ += 2
+                    ++prefix_length_;
+                case 128: // prefix_length_ += 1
+                    ++prefix_length_;
+                case 0: // nbits += 0
+                    finished = true;
+                    break;
+                default:
+                    throw invalid_argument{ "non-contiguous netmask" };
+                }
+            }
+        }
+    }
 
-bool operator==(const network_v4&, const network_v4&) noexcept;
-bool operator!=(const network_v4&, const network_v4&) noexcept;
+    constexpr address_v4 address() const noexcept { return address_; }
+    constexpr int prefix_length() const noexcept { return prefix_length_; }
+    constexpr address_v4 netmask() const noexcept
+    {
+        uint_least32_t nmbits{ 0xffffffff };
+        if (prefix_length_ == 0)
+            nmbits = 0;
+        else
+            nmbits = nmbits << (32 - prefix_length_);
+        return address_v4{ nmbits };
+    }
+    constexpr address_v4 network() const noexcept { return address_v4{ address_.to_uint() & netmask().to_uint() }; }
+    constexpr address_v4 broadcast() const noexcept { return address_v4{ network().to_uint() | (netmask().to_uint() ^ 0xFFFFFFFF) }; }
+    address_v4_range hosts() const noexcept { return is_host() ? address_v4_range{ address_, address_v4{ address_.to_uint() + 1 } } : address_v4_range{ address_v4{ network().to_uint() + 1 }, broadcast() }; }
+    constexpr network_v4 canonical() const noexcept { return network_v4{ network(), netmask() }; }
+    constexpr bool is_host() const noexcept { return prefix_length_ == 32; }
+    constexpr bool is_subnet_of(const network_v4& other) const noexcept
+    {
+        if (other.prefix_length_ >= prefix_length_)
+            return false;
+        const network_v4 me{ address_, other.prefix_length_ };
+        return other.canonical() == me.canonical();
+    }
 
-bool operator==(const network_v6&, const network_v6&) noexcept;
-bool operator!=(const network_v6&, const network_v6&) noexcept;
+    template <class Allocator = allocator<char>>
+    basic_string<char, char_traits<char>, Allocator> to_string(const Allocator& a = {}) const
+    {
+        basic_ostringstream<char, char_traits<char>, Allocator> s{};
+        s << address_.to_string(a) << '/' << prefix_length_;
+        return s.str();
+    }
+    template <class CharT, class Traits>
+    friend basic_ostream<CharT, Traits>& operator<<(basic_ostream<CharT, Traits>& s, const network_v4& net)
+    {
+        return s << net.address_.to_string() << '/' << net.prefix_length_;
+    }
 
-network_v4 make_network_v4(const address_v4&, int);
-network_v4 make_network_v4(const address_v4&, const address_v4&);
-network_v4 make_network_v4(const char*);
-network_v4 make_network_v4(const char*, error_code&) noexcept;
-network_v4 make_network_v4(const string&);
+    friend constexpr bool operator==(const network_v4& a, const network_v4& b) noexcept { return a.address_ == b.address_ && a.prefix_length_ == b.prefix_length_; }
+    friend constexpr bool operator!=(const network_v4& a, const network_v4& b) noexcept { return !(a == b); }
+
+private:
+    address_v4 address_;
+    int prefix_length_;
+};
+
+inline network_v4 make_network_v4(const address_v4& addr, int prefix_len) { return network_v4{ addr, prefix_len }; }
+inline network_v4 make_network_v4(const address_v4& addr, const address_v4& mask) { return network_v4{ addr, mask }; }
 network_v4 make_network_v4(const string&, error_code&) noexcept;
-network_v4 make_network_v4(string_view);
-network_v4 make_network_v4(string_view, error_code&) noexcept;
+inline network_v4 make_network_v4(const string& str)
+{
+    error_code ec{};
+    auto r{ make_network_v4(str, ec) };
+    _Check_error_code(ec, __func__);
+    return r;
+}
+inline network_v4 make_network_v4(const char* str, error_code& ec) noexcept { return make_network_v4(string{ str }, ec); }
+inline network_v4 make_network_v4(const char* str)
+{
+    error_code ec{};
+    auto r{ make_network_v4(str, ec) };
+    _Check_error_code(ec, __func__);
+    return r;
+}
+inline network_v4 make_network_v4(string_view str, error_code& ec) noexcept { return make_network_v4(static_cast<string>(str), ec); }
+inline network_v4 make_network_v4(string_view str)
+{
+    error_code ec{};
+    auto r{ make_network_v4(str, ec) };
+    _Check_error_code(ec, __func__);
+    return r;
+}
 
-network_v6 make_network_v6(const address_v6&, int);
-network_v6 make_network_v6(const char*);
-network_v6 make_network_v6(const char*, error_code&) noexcept;
-network_v6 make_network_v6(const string&);
+class network_v6
+{
+public:
+    constexpr network_v6() noexcept : address_(), prefix_length_(0) {}
+    constexpr network_v6(const address_v6& addr, int prefix_len) : address_(addr), prefix_length_(prefix_len)
+    {
+        if (prefix_len < 0 || prefix_len > 128)
+            throw out_of_range{ "prefix length too large" };
+    }
+
+    constexpr address_v6 address() const noexcept { return address_; }
+    constexpr int prefix_length() const noexcept { return prefix_length_; }
+    constexpr address_v6 network() const noexcept
+    {
+        address_v6::bytes_type bytes{ address_.to_bytes() };
+        for (size_t i{ 0 }; i < 16; ++i)
+        {
+            if (prefix_length_ <= i * 8)
+                bytes[i] = 0;
+            else if (prefix_length_ < (i + 1) * 8)
+                bytes[i] &= 0xFF00 >> (prefix_length_ % 8);
+        }
+        return address_v6{ bytes, address_.scope_id() };
+    }
+    address_v6_range hosts() const noexcept
+    {
+        address_v6::bytes_type begin_bytes{ address_.to_bytes() };
+        address_v6::bytes_type end_bytes{ address_.to_bytes() };
+        for (size_t i{ 0 }; i < 16; ++i)
+        {
+            if (prefix_length_ <= i * 8)
+            {
+                begin_bytes[i] = 0;
+                end_bytes[i] = 0xFF;
+            }
+            else if (prefix_length_ < (i + 1) * 8)
+            {
+                begin_bytes[i] &= 0xFF00 >> (prefix_length_ % 8);
+                end_bytes[i] |= 0xFF >> (prefix_length_ % 8);
+            }
+        }
+        return address_v6_range{ address_v6_iterator{ address_v6{ begin_bytes, address_.scope_id() } }, ++address_v6_iterator{ address_v6{ end_bytes, address_.scope_id() } } };
+    }
+    constexpr network_v6 canonical() const noexcept { return network_v6{ network(), prefix_length() }; }
+    constexpr bool is_host() const noexcept { return prefix_length_ == 128; }
+    constexpr bool is_subnet_of(const network_v6& other) const noexcept
+    {
+        if (other.prefix_length_ >= prefix_length_)
+            return false;
+        const network_v6 me{ address_, other.prefix_length_ };
+        return other.canonical() == me.canonical();
+    }
+
+    template <class Allocator = allocator<char>>
+    basic_string<char, char_traits<char>, Allocator> to_string(const Allocator& a = {}) const
+    {
+        basic_ostringstream<char, char_traits<char>, Allocator> s{};
+        s << address_.to_string(a) << '/' << prefix_length_;
+        return s.str();
+    }
+    template <class CharT, class Traits>
+    friend basic_ostream<CharT, Traits>& operator<<(basic_ostream<CharT, Traits>& s, const network_v6& net)
+    {
+        return s << net.address_.to_string() << '/' << net.prefix_length_;
+    }
+
+    friend constexpr bool operator==(const network_v6& a, const network_v6& b) noexcept { return a.address_ == b.address_ && a.prefix_length_ == b.prefix_length_; }
+    friend constexpr bool operator!=(const network_v6& a, const network_v6& b) noexcept { return !(a == b); }
+
+private:
+    address_v6 address_;
+    int prefix_length_;
+};
+
+inline network_v6 make_network_v6(const address_v6& addr, int prefix_len) { return network_v6{ addr, prefix_len }; }
 network_v6 make_network_v6(const string&, error_code&) noexcept;
-network_v6 make_network_v6(string_view);
-network_v6 make_network_v6(string_view, error_code&) noexcept;
-
-template <class CharT, class Traits>
-basic_ostream<CharT, Traits>& operator<<(basic_ostream<CharT, Traits>&, const network_v4&);
-
-template <class CharT, class Traits>
-basic_ostream<CharT, Traits>& operator<<(basic_ostream<CharT, Traits>&, const network_v6&);
+inline network_v6 make_network_v6(const string& str)
+{
+    error_code ec{};
+    auto r{ make_network_v6(str, ec) };
+    _Check_error_code(ec, __func__);
+    return r;
+}
+inline network_v6 make_network_v6(const char* str, error_code& ec) noexcept { return make_network_v6(string{ str }, ec); }
+inline network_v6 make_network_v6(const char* str)
+{
+    error_code ec{};
+    auto r{ make_network_v6(str, ec) };
+    _Check_error_code(ec, __func__);
+    return r;
+}
+inline network_v6 make_network_v6(string_view str, error_code& ec) noexcept { return make_network_v6(static_cast<string>(str), ec); }
+inline network_v6 make_network_v6(string_view str)
+{
+    error_code ec{};
+    auto r{ make_network_v6(str, ec) };
+    _Check_error_code(ec, __func__);
+    return r;
+}
 
 template <class InternetProtocol>
 class basic_endpoint;
