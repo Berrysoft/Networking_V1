@@ -1,8 +1,9 @@
 #ifndef NET_TIMER
 #define NET_TIMER
 
-#include <chrono>
 #include <experimental/io_context>
+
+#include <chrono>
 
 namespace std::experimental::net
 {
@@ -40,34 +41,57 @@ public:
     using time_point = typename clock_type::time_point;
     using traits_type = WaitTraits;
 
-    explicit basic_waitable_timer(io_context& ctx);
-    basic_waitable_timer(io_context& ctx, const time_point& t);
-    basic_waitable_timer(io_context& ctx, const duration& d);
+    explicit basic_waitable_timer(io_context& ctx) : ex_(ctx.get_executor()), expiry_() {}
+    basic_waitable_timer(io_context& ctx, const time_point& t) : ex_(ctx.get_executor()), expiry_(t) {}
+    basic_waitable_timer(io_context& ctx, const duration& d) : ex_(ctx.get_executor()), expiry_(Clock::now() + d) {}
     basic_waitable_timer(const basic_waitable_timer&) = delete;
-    basic_waitable_timer(basic_waitable_timer&& rhs);
+    basic_waitable_timer(basic_waitable_timer&& rhs) : ex_(move(rhs.ex_)), expiry_(rhs.expiry_) { rhs.expiry_ = {}; }
 
-    ~basic_waitable_timer();
+    ~basic_waitable_timer() { cancel(); }
 
     basic_waitable_timer& operator=(const basic_waitable_timer&) = delete;
-    basic_waitable_timer& operator=(basic_waitable_timer&& rhs);
+    basic_waitable_timer& operator=(basic_waitable_timer&& rhs)
+    {
+        cancel();
+        ex_ = move(rhs.ex_);
+        expiry_ = rhs.expiry_;
+        rhs.expiry_ = {};
+        return *this;
+    }
 
-    executor_type get_executor() noexcept;
+    executor_type get_executor() noexcept { return ex_; }
 
     size_t cancel();
     size_t cancel_one();
 
-    time_point expiry() const;
-    size_t expires_at(const time_point& t);
-    size_t expires_after(const duration& d);
+    time_point expiry() const { return expiry_; }
+    size_t expires_at(const time_point& t)
+    {
+        size_t cancelled = cancel();
+        expiry_ = t;
+        return cancelled;
+    }
+    size_t expires_after(const duration& d) { return expires_at(Clock::now() + d); }
 
-    void wait();
-    void wait(error_code& ec);
+    void wait(error_code&)
+    {
+        ex_.dispatch([this] {
+            while (Clock::now() < expiry_)
+                this_thread::sleep_for(traits_type::to_wait_duration(expiry_)); }, allocator<void>{});
+    }
+    void wait()
+    {
+        error_code ec{};
+        wait(ec);
+        _Check_error_code(ec, __func__);
+    }
 
     template <class CompletionToken>
     auto async_wait(CompletionToken&& token);
 
 private:
     executor_type ex_;
+    time_point expiry_;
 };
 
 using system_timer = basic_waitable_timer<chrono::system_clock>;

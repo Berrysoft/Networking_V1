@@ -1,6 +1,8 @@
 #ifndef NET_BUFFER
 #define NET_BUFFER
 
+#include <experimental/netfwd>
+
 #include <algorithm>
 #include <array>
 #include <string>

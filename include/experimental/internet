@@ -1,13 +1,13 @@
 #ifndef NET_INTERNET
 #define NET_INTERNET
 
+#include <experimental/io_context>
+
 #include <WinSock2.h>
 #include <Ws2tcpip.h>
 #include <algorithm>
 #include <array>
 #include <cstring>
-#include <experimental/io_context>
-#include <experimental/netfwd>
 #include <functional>
 #include <sstream>
 #include <string>

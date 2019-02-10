@@ -1,25 +1,73 @@
 #ifndef NET_IO_CONTEXT
 #define NET_IO_CONTEXT
 
-#include <chrono>
 #include <experimental/executor>
+
+#include <WinBase.h>
+#include <chrono>
 #include <limits>
+#include <memory>
+#include <optional>
+#include <queue>
+#include <vector>
 
 namespace std::experimental::net
 {
 inline namespace v1
 {
+struct _Handle_delete
+{
+    constexpr _Handle_delete() noexcept = default;
+    void operator()(HANDLE ptr) const { ::CloseHandle(ptr); }
+};
+
+using unique_handle = unique_ptr<void, _Handle_delete>;
+
+class _Io_operation : public OVERLAPPED
+{
+public:
+    using operation_type = _Io_operation;
+    using func_type = void (*)(void*, _Io_operation*, const error_code&, size_t);
+
+    void complete(void* owner, const error_code& ec, size_t n) { func_(owner, this, ec, n); }
+    void destory() { func_(nullptr, this, error_code{}, 0); }
+
+protected:
+    _Io_operation(func_type func) : func_(func) { reset(); }
+    ~_Io_operation() {}
+
+    void reset()
+    {
+        Internal = 0;
+        InternalHigh = 0;
+        Offset = 0;
+        OffsetHigh = 0;
+        hEvent = 0;
+        ready_ = 0;
+    }
+
+private:
+    friend class io_context;
+
+    func_type func_;
+    long ready_;
+};
+
+class _Timer_queue_set
+{
+};
+
 class io_context : public execution_context
 {
 public:
     class executor_type
     {
     public:
-        executor_type(const executor_type& other) noexcept;
-        executor_type(executor_type&& other) noexcept;
+        executor_type(const executor_type& other) noexcept = default;
+        executor_type(executor_type&& other) noexcept = default;
 
-        executor_type& operator=(const executor_type& other) noexcept;
-        executor_type& operator=(executor_type&& other) noexcept;
+        executor_type& operator=(const executor_type& other) noexcept = default;
+        executor_type& operator=(executor_type&& other) noexcept = default;
 
         bool running_in_this_thread() const noexcept;
 
@@ -37,15 +85,31 @@ public:
 
         friend inline bool operator==(const executor_type& a, const executor_type& b) { return addressof(a.context()) == addressof(b.context()); }
         friend inline bool operator!=(const executor_type& a, const executor_type& b) { return !(a == b); }
+
+    private:
+        friend class io_context;
+
+        explicit executor_type(io_context& ctx) : ctx_(addressof(ctx)) {}
+
+        io_context* ctx_;
     };
+
     using count_type = size_t;
 
-    io_context();
+    io_context() : io_context(-1) {}
     explicit io_context(int concurrency_hint);
     io_context(const io_context&) = delete;
     io_context& operator=(const io_context&) = delete;
 
     executor_type get_executor() noexcept;
+
+    count_type _Do_one(DWORD msec);
+    void _Work_started();
+    void _Work_finished();
+
+    void _Post_deferred_completions(queue<_Io_operation>& ops);
+
+    void _Update_timeout();
 
     count_type run_one();
     template <class Clock, class Duration>
@@ -79,6 +143,7 @@ public:
         return run_until(chrono::steady_clock::now() + rel_time);
     }
 
+    count_type poll_one();
     count_type poll()
     {
         count_type n{ 0 };
@@ -88,13 +153,30 @@ public:
         return n;
     }
 
-    count_type poll_one();
-
     void stop();
-
     bool stopped() const noexcept;
-
     void restart();
+
+private:
+    unique_handle iocp_;
+    long outstanding_work_;
+    mutable long stopped_;
+    long stop_event_posted_;
+    long shutdown_;
+    const DWORD gqcs_timeout_;
+    optional<thread> timer_thread_;
+    unique_handle waitable_timer_;
+    long dispatch_required_;
+    mutable mutex dispatch_mutex_;
+    _Timer_queue_set timer_queues_;
+    queue<_Io_operation> completed_ops_;
+    const int concurrency_hint_;
+
+    static constexpr long default_gqcs_timeout{ 500 };
+    static constexpr long max_timeout_msec{ 5 * 60 * 1000 };
+    static constexpr long max_timeout_usec{ max_timeout_msec * 1000 };
+    static constexpr long wake_for_dispatch{ 1 };
+    static constexpr long overlapped_contains_result{ 2 };
 };
 } // namespace v1
 } // namespace std::experimental::net

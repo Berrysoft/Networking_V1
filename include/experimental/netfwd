@@ -1,6 +1,8 @@
 #ifndef NET_NETFWD
 #define NET_NETFWD
 
+#define NOMINMAX
+
 #include <chrono>
 #include <system_error>
 
