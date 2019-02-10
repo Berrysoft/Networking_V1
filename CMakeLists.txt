@@ -17,6 +17,3 @@ add_headers(NET_HEADERS net netfwd executor timer io_context buffer socket inter
 
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/experimental/ NET_SOURCE)
 add_library(net SHARED ${NET_SOURCE})
-
-install(FILES ${NET_HEADERS} DESTINATION include/experimental)
-install(TARGETS net DESTINATION lib)
