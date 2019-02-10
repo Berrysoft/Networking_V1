@@ -65,6 +65,9 @@ public:
 
     template <class CompletionToken>
     auto async_wait(CompletionToken&& token);
+
+private:
+    executor_type ex_;
 };
 
 using system_timer = basic_waitable_timer<chrono::system_clock>;

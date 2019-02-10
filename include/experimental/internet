@@ -1,17 +1,20 @@
 #ifndef NET_INTERNET
 #define NET_INTERNET
 
-#include <arpa/inet.h>
+#include <WinSock2.h>
+#include <Ws2tcpip.h>
+#include <algorithm>
 #include <array>
 #include <cstring>
+#include <experimental/io_context>
 #include <experimental/netfwd>
 #include <functional>
-#include <netinet/in.h>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <type_traits>
+#include <vector>
 
 namespace std
 {
@@ -23,9 +26,9 @@ namespace ip
 {
 enum class resolver_errc
 {
-    host_not_found = -2, // EAI_NONAME
-    try_again = -3, // EAI_AGAIN
-    service_not_found = -8 // EAI_SERVICE
+    host_not_found = EAI_NONAME,
+    try_again = EAI_AGAIN,
+    service_not_found = EAI_SERVICE
 };
 
 struct _Resolver_category : error_category
@@ -83,8 +86,9 @@ public:
 
     constexpr address_v4() noexcept : addr_() { addr_.s_addr = 0; }
     constexpr address_v4(const address_v4& a) noexcept : addr_(a.addr_) {}
-    constexpr address_v4(const bytes_type& bytes) : addr_() { copy(bytes.begin(), bytes.end(), (unsigned char*)&addr_.s_addr); }
+    constexpr address_v4(const bytes_type& bytes) : addr_() { memcpy(&addr_.s_addr, bytes.data(), 4); }
     explicit constexpr address_v4(uint_type val) : addr_() { addr_.s_addr = ::htonl(val); }
+    constexpr address_v4(::in_addr val) : addr_(val) {}
 
     address_v4& operator=(const address_v4& a) noexcept
     {
@@ -95,10 +99,13 @@ public:
     constexpr bytes_type to_bytes() const noexcept
     {
         bytes_type bytes{};
-        copy((unsigned char*)&addr_.s_addr, (unsigned char*)&addr_.s_addr + sizeof(uint_type), bytes.begin());
+        memcpy(bytes.data(), &addr_.s_addr, 4);
         return bytes;
     }
     constexpr uint_type to_uint() const noexcept { return ::ntohl(addr_.s_addr); }
+    constexpr ::in_addr& _Addr() noexcept { return addr_; }
+    constexpr const ::in_addr& _Addr() const noexcept { return addr_; }
+
     constexpr bool is_unspecified() const noexcept { return to_uint() == 0; }
     constexpr bool is_loopback() const noexcept { return (to_uint() & 0xFF000000) == 0x7F000000; }
     constexpr bool is_multicast() const noexcept { return (to_uint() & 0xF0000000) == 0xE0000000; }
@@ -153,21 +160,9 @@ inline address_v4 make_address_v4(const char* str)
     return r;
 }
 inline address_v4 make_address_v4(const string& str, error_code& ec) noexcept { return make_address_v4(str.c_str(), ec); }
-inline address_v4 make_address_v4(const string& str)
-{
-    error_code ec{};
-    auto r{ make_address_v4(str, ec) };
-    _Check_error_code(ec, __func__);
-    return r;
-}
+inline address_v4 make_address_v4(const string& str) { return make_address_v4(str.c_str()); }
 inline address_v4 make_address_v4(string_view str, error_code& ec) noexcept { return make_address_v4(static_cast<string>(str), ec); }
-inline address_v4 make_address_v4(string_view str)
-{
-    error_code ec{};
-    auto r{ make_address_v4(str, ec) };
-    _Check_error_code(ec, __func__);
-    return r;
-}
+inline address_v4 make_address_v4(string_view str) { return make_address_v4(static_cast<string>(str)); }
 
 class address_v6
 {
@@ -181,7 +176,8 @@ public:
     };
     constexpr address_v6() noexcept : addr_(), scope_id_(0) {}
     constexpr address_v6(const address_v6& a) noexcept : addr_(a.addr_), scope_id_(a.scope_id_) {}
-    constexpr address_v6(const bytes_type& bytes, scope_id_type scope = 0) : addr_(), scope_id_(scope) { copy(bytes.begin(), bytes.end(), (unsigned char*)addr_.s6_addr); }
+    constexpr address_v6(const bytes_type& bytes, scope_id_type scope = 0) : addr_(), scope_id_(scope) { memcpy(addr_.s6_addr, bytes.data(), 16); }
+    constexpr address_v6(::in6_addr addr, scope_id_type scope) : addr_(addr), scope_id_(scope) {}
 
     address_v6& operator=(const address_v6& a) noexcept
     {
@@ -189,6 +185,15 @@ public:
         scope_id_ = a.scope_id_;
         return *this;
     }
+
+    constexpr bytes_type to_bytes() const noexcept
+    {
+        bytes_type bytes;
+        memcpy(bytes.data(), addr_.s6_addr, 16);
+        return bytes;
+    }
+    constexpr ::in6_addr& _Addr() noexcept { return addr_; }
+    constexpr const ::in6_addr& _Addr() const noexcept { return addr_; }
 
     void scope_id(scope_id_type id) noexcept { scope_id_ = id; }
     constexpr scope_id_type scope_id() const noexcept { return scope_id_; }
@@ -253,12 +258,6 @@ public:
     constexpr bool is_multicast_site_local() const noexcept { return (addr_.s6_addr[0] == 0xff) && ((addr_.s6_addr[1] & 0x0f) == 0x05); }
     constexpr bool is_multicast_org_local() const noexcept { return (addr_.s6_addr[0] == 0xff) && ((addr_.s6_addr[1] & 0x0f) == 0x08); }
     constexpr bool is_multicast_global() const noexcept { return (addr_.s6_addr[0] == 0xff) && ((addr_.s6_addr[1] & 0x0f) == 0x0e); }
-    constexpr bytes_type to_bytes() const noexcept
-    {
-        bytes_type bytes;
-        copy((unsigned char*)addr_.s6_addr, (unsigned char*)addr_.s6_addr + 16, bytes.begin());
-        return bytes;
-    }
     template <class Allocator = allocator<char>>
     basic_string<char, char_traits<char>, Allocator> to_string(const Allocator& a = {}) const
     {
@@ -297,10 +296,8 @@ public:
     friend constexpr bool operator>=(const address_v6& a, const address_v6& b) noexcept { return !(a < b); }
 
 private:
-    friend class basic_address_iterator<address_v6>;
-
     ::in6_addr addr_;
-    unsigned long scope_id_;
+    scope_id_type scope_id_;
 };
 
 template <class CharT, class Traits>
@@ -325,21 +322,9 @@ inline address_v6 make_address_v6(const char* str)
     return r;
 }
 inline address_v6 make_address_v6(const string& str, error_code& ec) noexcept { return make_address_v6(str.c_str(), ec); }
-inline address_v6 make_address_v6(const string& str)
-{
-    error_code ec{};
-    auto r{ make_address_v6(str, ec) };
-    _Check_error_code(ec, __func__);
-    return r;
-}
+inline address_v6 make_address_v6(const string& str) { return make_address_v6(str.c_str()); }
 inline address_v6 make_address_v6(string_view str, error_code& ec) noexcept { return make_address_v6(static_cast<string>(str), ec); }
-inline address_v6 make_address_v6(string_view str)
-{
-    error_code ec{};
-    auto r{ make_address_v6(str, ec) };
-    _Check_error_code(ec, __func__);
-    return r;
-}
+inline address_v6 make_address_v6(string_view str) { return make_address_v6(static_cast<string>(str)); }
 
 class address
 {
@@ -450,21 +435,9 @@ inline address make_address(const char* str)
     return r;
 }
 inline address make_address(const string& str, error_code& ec) noexcept { return make_address(str.c_str(), ec); }
-inline address make_address(const string& str)
-{
-    error_code ec{};
-    auto r{ make_address(str, ec) };
-    _Check_error_code(ec, __func__);
-    return r;
-}
+inline address make_address(const string& str) { return make_address(str.c_str()); }
 inline address make_address(string_view str, error_code& ec) noexcept { return make_address(static_cast<string>(str), ec); }
-inline address make_address(string_view str)
-{
-    error_code ec{};
-    auto r{ make_address(str, ec) };
-    _Check_error_code(ec, __func__);
-    return r;
-}
+inline address make_address(string_view str) { return make_address(static_cast<string>(str)); }
 
 template <class>
 class basic_address_iterator;
@@ -702,21 +675,9 @@ inline network_v4 make_network_v4(const string& str)
     return r;
 }
 inline network_v4 make_network_v4(const char* str, error_code& ec) noexcept { return make_network_v4(string{ str }, ec); }
-inline network_v4 make_network_v4(const char* str)
-{
-    error_code ec{};
-    auto r{ make_network_v4(str, ec) };
-    _Check_error_code(ec, __func__);
-    return r;
-}
+inline network_v4 make_network_v4(const char* str) { return make_network_v4(string{ str }); }
 inline network_v4 make_network_v4(string_view str, error_code& ec) noexcept { return make_network_v4(static_cast<string>(str), ec); }
-inline network_v4 make_network_v4(string_view str)
-{
-    error_code ec{};
-    auto r{ make_network_v4(str, ec) };
-    _Check_error_code(ec, __func__);
-    return r;
-}
+inline network_v4 make_network_v4(string_view str) { return make_network_v4(static_cast<string>(str)); }
 
 class network_v6
 {
@@ -802,93 +763,536 @@ inline network_v6 make_network_v6(const string& str)
     return r;
 }
 inline network_v6 make_network_v6(const char* str, error_code& ec) noexcept { return make_network_v6(string{ str }, ec); }
-inline network_v6 make_network_v6(const char* str)
-{
-    error_code ec{};
-    auto r{ make_network_v6(str, ec) };
-    _Check_error_code(ec, __func__);
-    return r;
-}
+inline network_v6 make_network_v6(const char* str) { return make_network_v6(string{ str }); }
 inline network_v6 make_network_v6(string_view str, error_code& ec) noexcept { return make_network_v6(static_cast<string>(str), ec); }
-inline network_v6 make_network_v6(string_view str)
+inline network_v6 make_network_v6(string_view str) { return make_network_v6(static_cast<string>(str)); }
+
+template <class InternetProtocol>
+class basic_endpoint
 {
-    error_code ec{};
-    auto r{ make_network_v6(str, ec) };
-    _Check_error_code(ec, __func__);
-    return r;
+public:
+    using protocol_type = InternetProtocol;
+
+    constexpr basic_endpoint() noexcept : data_() { data_.v4.sin_family = protocal_type::v4().family(); }
+    constexpr basic_endpoint(const protocol_type& proto, port_type port_num) noexcept : data_()
+    {
+        data_.v4.sin_family = proto.family();
+        data_.v4.sin_port = ::htons(port_num);
+    }
+    constexpr basic_endpoint(const address& addr, port_type port_num) noexcept : data_()
+    {
+        if (addr.is_v4())
+        {
+            data_.v4.sin_family = protocol_type::v4().family();
+            data_.v4.sin_port = ::htons(port_num);
+            data_.v4.sin_addr.s_addr = ::htonl(addr.to_v4().to_uint());
+        }
+        else
+        {
+            data_.v6 = {};
+            data_.v6.sin6_family = protocol_type::v6().family();
+            data_.v6.sin6_family = ::htons(port_num);
+            auto v6a{ addr.to_v6() };
+            auto bytes{ v6a.to_bytes() };
+            memcpy(data_.v6.sin6_addr.s6_addr, bytes.data(), 16);
+            data_.v6.sin6_scope_id = v6a.scope_id();
+        }
+    }
+    constexpr basic_endpoint(const ::sockaddr_in& addr) noexcept : data_() { data_.v4 = addr; }
+    constexpr basic_endpoint(const ::sockaddr_in6& addr) noexcept : data_() { data_.v6 = addr; }
+
+    constexpr protocol_type protocol() const noexcept { return data_.v4.sin_family == AF_INET ? protocol_type::v4() : protocol_type::v6(); }
+    constexpr address address() const noexcept
+    {
+        if (data_.v4.sin_family == AF_INET)
+        {
+            address_v4 addr{ data_.v4.sin_addr };
+            return addr;
+        }
+        else
+        {
+            address_v6 addr{};
+            memcpy(addr._Addr().s6_addr, data_.v6.sin6_addr.s6_addr, 16);
+            addr.scope_id = data_.v6.sin6_scope_id;
+            return addr;
+        }
+    }
+    void address(const address& addr) noexcept
+    {
+        if (addr.is_v4())
+        {
+            data_.v4.sin_family = protocol_type::v4().family();
+            data_.v4.sin_addr = addr.to_v4()._Addr();
+        }
+        else
+        {
+            data_.v6 = {};
+            data_.v6.sin6_family = protocol_type::v6().family();
+            auto v6a{ addr.to_v6() };
+            memcpy(data_.v6.sin6_addr.s6_addr, v6a._Addr().s6_addr, 16);
+            data_.v6.sin6_scope_id = v6a.scope_id();
+        }
+    }
+    constexpr port_type port() const noexcept { return ::ntohs(data_.v4.sin_port); }
+    void port(port_type port_num) noexcept { data_.v4.sin_port = ::htons(port_num); }
+
+    void* data() noexcept { return &data_; }
+    const void* data() const noexcept { return &data_; }
+    constexpr size_t size() const noexcept { return data_.v4.sin_family == AF_INET ? sizeof(::sockaddr_in) : sizeof(::sockaddr_in6); }
+    void resize(size_t s)
+    {
+        if ((data_.v4.sin_family == AF_INET && s != sizeof(::sockaddr_in)) || (data_.v4.sin_family == AF_INET6 && s != sizeof(::sockaddr_in6)))
+            throw length_error{ "invalid end_point size" };
+    }
+    constexpr size_t capacity() const noexcept { return sizeof(data_); }
+
+private:
+    union {
+        ::sockaddr_in v4;
+        ::sockaddr_in6 v6;
+    } data_;
+};
+
+template <class InternetProtocol>
+constexpr bool operator==(const basic_endpoint<InternetProtocol>& a, const basic_endpoint<InternetProtocol>& b)
+{
+    return a.address() == b.address() && a.port() == b.port();
 }
-
 template <class InternetProtocol>
-class basic_endpoint;
-
+constexpr bool operator!=(const basic_endpoint<InternetProtocol>& a, const basic_endpoint<InternetProtocol>& b)
+{
+    return !(a == b);
+}
 template <class InternetProtocol>
-bool operator==(const basic_endpoint<InternetProtocol>&, const basic_endpoint<InternetProtocol>&);
+constexpr bool operator<(const basic_endpoint<InternetProtocol>& a, const basic_endpoint<InternetProtocol>& b)
+{
+    return a.address() < b.address() && a.port() < b.port();
+}
 template <class InternetProtocol>
-bool operator!=(const basic_endpoint<InternetProtocol>&, const basic_endpoint<InternetProtocol>&);
+constexpr bool operator>(const basic_endpoint<InternetProtocol>& a, const basic_endpoint<InternetProtocol>& b)
+{
+    return b < a;
+}
 template <class InternetProtocol>
-bool operator<(const basic_endpoint<InternetProtocol>&, const basic_endpoint<InternetProtocol>&);
+constexpr bool operator<=(const basic_endpoint<InternetProtocol>& a, const basic_endpoint<InternetProtocol>& b)
+{
+    return !(b < a);
+}
 template <class InternetProtocol>
-bool operator>(const basic_endpoint<InternetProtocol>&, const basic_endpoint<InternetProtocol>&);
-template <class InternetProtocol>
-bool operator<=(const basic_endpoint<InternetProtocol>&, const basic_endpoint<InternetProtocol>&);
-template <class InternetProtocol>
-bool operator>=(const basic_endpoint<InternetProtocol>&, const basic_endpoint<InternetProtocol>&);
+constexpr bool operator>=(const basic_endpoint<InternetProtocol>& a, const basic_endpoint<InternetProtocol>& b)
+{
+    return !(a < b);
+}
 
 template <class CharT, class Traits, class InternetProtocol>
-basic_ostream<CharT, Traits>& operator<<(basic_ostream<CharT, Traits>&, const basic_endpoint<InternetProtocol>&);
+inline basic_ostream<CharT, Traits>& operator<<(basic_ostream<CharT, Traits>& os, const basic_endpoint<InternetProtocol>& ep)
+{
+    basic_ostringstream<CharT, Traits> ss;
+    if (ep.protocol() == basic_endpoint<InternetProtocol>::protocol_type::v6())
+        ss << "[" << ep.address() << "]";
+    else
+        ss << ep.address();
+    ss << ":" << ep.port();
+    os << ss.str();
+    return os;
+}
 
 template <class InternetProtocol>
-class basic_resolver_entry;
+class basic_resolver_entry
+{
+public:
+    using protocol_type = InternetProtocol;
+    using endpoint_type = typename InternetProtocol::endpoint;
+
+    basic_resolver_entry() {}
+    basic_resolver_entry(const endpoint_type& ep, string_view h, string_view s) : ep_(ep), host_(h), svc_(s) {}
+
+    endpoint_type endpoint() const { return ep_; }
+    operator endpoint_type() const { return ep_; }
+    template <class Allocator = allocator<char>>
+    basic_string<char, char_traits<char>, Allocator> host_name(const Allocator& a = {}) const
+    {
+        return basic_string{ host_, a };
+    }
+    template <class Allocator = allocator<char>>
+    basic_string<char, char_traits<char>, Allocator> service_name(const Allocator& a = {}) const
+    {
+        return basic_string{ svc_, a };
+    }
+
+    template <class InternetProtocol>
+    friend bool operator==(const basic_resolver_entry<InternetProtocol>& a, const basic_resolver_entry<InternetProtocol>& b)
+    {
+        return a.ep_ == b.ep_ && a.host_ == b.host_ && a.svc_ == b.svc_;
+    }
+    template <class InternetProtocol>
+    friend bool operator!=(const basic_resolver_entry<InternetProtocol>& a, const basic_resolver_entry<InternetProtocol>& b)
+    {
+        return !(a == b);
+    }
+
+private:
+    endpoint_type ep_;
+    string host_;
+    string svc_;
+};
 
 template <class InternetProtocol>
-bool operator==(const basic_resolver_entry<InternetProtocol>&, const basic_resolver_entry<InternetProtocol>&);
-template <class InternetProtocol>
-bool operator!=(const basic_resolver_entry<InternetProtocol>&, const basic_resolver_entry<InternetProtocol>&);
+class basic_resolver_results
+{
+public:
+    using protocol_type = InternetProtocol;
+    using endpoint_type = typename protocol_type::endpoint;
+    using value_type = basic_resolver_entry<protocol_type>;
+    using const_reference = const value_type&;
+    using reference = value_type&;
+    using const_iterator = typename vector<value_type>::const_iterator;
+    using iterator = const_iterator;
+    using difference_type = ptrdiff_t;
+    using size_type = size_t;
+
+    basic_resolver_results() = default;
+    basic_resolver_results(const basic_resolver_results&) = default;
+    basic_resolver_results(basic_resolver_results&&) noexcept = default;
+    basic_resolver_results& operator=(const basic_resolver_results&) = default;
+    basic_resolver_results& operator=(basic_resolver_results&&) = default;
+    ~basic_resolver_results() = default;
+
+    size_type size() const noexcept { return results_.size(); }
+    size_type max_size() const noexcept { return results_.max_size(); }
+    bool empty() const noexcept { return results_.empty(); }
+
+    const_iterator begin() const { return results_.begin(); }
+    const_iterator end() const { return results_.end(); }
+    const_iterator cbegin() const { return results_.cbegin(); }
+    const_iterator cend() const { return results_.cend(); }
+
+    void swap(basic_resolver_results& that) noexcept { results_.swap(that.results_); }
+
+private:
+    friend class basic_resolver<InternetProtocol>;
+
+    vector<value_type> results_;
+};
 
 template <class InternetProtocol>
-class basic_resolver_results;
+inline bool operator==(const basic_resolver_results<InternetProtocol>& a, const basic_resolver_results<InternetProtocol>& b)
+{
+    return a.size() == b.size() && equal(a.begin(), a.end(), b.begin());
+}
+template <class InternetProtocol>
+inline bool operator!=(const basic_resolver_results<InternetProtocol>& a, const basic_resolver_results<InternetProtocol>& b)
+{
+    return !(a == b);
+}
+
+class resolver_base
+{
+public:
+    enum class flags
+    {
+        passive = AI_PASSIVE,
+        canonical_name = AI_CANONNAME,
+        numeric_host = AI_NUMERICHOST,
+        numeric_service = AI_NUMERICSERV,
+        v4_mapped = AI_V4MAPPED,
+        all_matching = AI_ALL,
+        address_configured = AI_ADDRCONFIG
+    };
+    static constexpr flags passive{ flags::passive };
+    static constexpr flags canonical_name{ flags::canonical_name };
+    static constexpr flags numeric_host{ flags::numeric_host };
+    static constexpr flags numeric_service{ flags::numeric_service };
+    static constexpr flags v4_mapped{ flags::v4_mapped };
+    static constexpr flags all_matching{ flags::all_matching };
+    static constexpr flags address_configured{ flags::address_configured };
+
+protected:
+    resolver_base() = default;
+    ~resolver_base() = default;
+};
 
 template <class InternetProtocol>
-bool operator==(const basic_resolver_results<InternetProtocol>&, const basic_resolver_results<InternetProtocol>&);
-template <class InternetProtocol>
-bool operator!=(const basic_resolver_results<InternetProtocol>&, const basic_resolver_results<InternetProtocol>&);
+class basic_resolver : public resolver_base
+{
+public:
+    using executor_type = io_context::executor_type;
+    using protocol_type = InternetProtocol;
+    using endpoint_type = typename InternetProtocol::endpoint;
+    using results_type = basic_resolver_results<InternetProtocol>;
 
-class resolver_base;
+    explicit basic_resolver(io_context& ctx) : ctx_(&ctx) {}
+    basic_resolver(const basic_resolver&) = delete;
+    basic_resolver(basic_resolver&& rhs) noexcept : ctx_(move(rhs.ctx_)) {}
 
-template <class InternetProtocol>
-class basic_resolver;
+    ~basic_resolver() { cancel(); }
 
-string host_name();
-string host_name(error_code&);
+    basic_resolver& operator=(const basic_resolver&) = delete;
+    basic_resolver& operator=(basic_resolver&& rhs)
+    {
+        cancel();
+        ctx_ = move(rhs.ctx_);
+        return *this;
+    }
+
+    executor_type get_executor() noexcept { return ctx_->get_executor(); }
+
+    void cancel();
+
+    results_type resolve(string_view host_name, string_view service_name, flags f, error_code& ec)
+    {
+        ::addrinfo hints;
+        hints.ai_flags = static_cast<int>(f);
+        hints.ai_family = AF_UNSPEC;
+        hints.ai_socktype = endpoint_type{}.protocol().type();
+        hints.ai_protocol = endpoint_type{}.protocol().protocol();
+        hints.ai_addr = nullptr;
+        hints.ai_addrlen = 0;
+        hints.ai_canonname = nullptr;
+        hints.ai_next = nullptr;
+        ::addrinfo* result = nullptr;
+        int r{ ::getaddrinfo(host_name.empty() ? nullptr : static_cast<string>(host_name).c_str(), service_name.empty() ? nullptr : static_cast<string>(service_name).c_str(), &hints, &result) };
+        if (r != 0)
+            ec = make_error_code(static_cast<resolver_errc>(r));
+        results_type results{};
+        for (::addrinfo* ptr{ result }; ptr; ptr = ptr->ai_next)
+        {
+            if (ptr->ai_family == AF_INET)
+                results.results_.emplace_back(*(::sockaddr_in*)ptr->ai_addr, ptr->ai_canonname, service_name);
+            else
+                results.results_.emplace_back(*(::sockaddr_in6*)ptr->ai_addr, ptr->ai_canonname, service_name);
+        }
+        ::freeaddrinfo(result);
+        return results;
+    }
+    results_type resolve(string_view host_name, string_view service_name, flags f)
+    {
+        error_code ec{};
+        auto r{ resolve(host_name, service_name, f, ec) };
+        _Check_error_code(ec, __func__);
+        return r;
+    }
+    results_type resolve(string_view host_name, string_view service_name, error_code& ec) { return resolve(host_name, service_name, flags{}, ec); }
+    results_type resolve(string_view host_name, string_view service_name) { return resolve(host_name, service_name, flags{}); }
+
+    template <class CompletionToken>
+    auto async_resolve(string_view host_name, string_view service_name, CompletionToken&& token);
+    template <class CompletionToken>
+    auto async_resolve(string_view host_name, string_view service_name, flags f, CompletionToken&& token);
+
+    results_type resolve(const protocol_type& protocol, string_view host_name, string_view service_name, flags f, error_code& ec)
+    {
+        ::addrinfo hints;
+        hints.ai_flags = static_cast<int>(f);
+        hints.ai_family = protocol.family();
+        hints.ai_socktype = protocol.type();
+        hints.ai_protocol = protocol.protocol();
+        hints.ai_addr = nullptr;
+        hints.ai_addrlen = 0;
+        hints.ai_canonname = nullptr;
+        hints.ai_next = nullptr;
+        ::addrinfo* result = nullptr;
+        int r{ ::getaddrinfo(host_name.empty() ? nullptr : static_cast<string>(host_name).c_str(), service_name.empty() ? nullptr : static_cast<string>(service_name).c_str(), &hints, &result) };
+        if (r != 0)
+        {
+            ec = make_error_code(static_cast<resolver_errc>(r));
+            return {};
+        }
+        results_type results{};
+        for (::addrinfo* ptr{ result }; ptr; ptr = ptr->ai_next)
+        {
+            if (ptr->ai_family == AF_INET)
+                results.results_.emplace_back(*(::sockaddr_in*)ptr->ai_addr, ptr->ai_canonname, service_name);
+            else
+                results.results_.emplace_back(*(::sockaddr_in6*)ptr->ai_addr, ptr->ai_canonname, service_name);
+        }
+        ::freeaddrinfo(result);
+        return results;
+    }
+    results_type resolve(const protocol_type& protocol, string_view host_name, string_view service_name, flags f)
+    {
+        error_code ec{};
+        auto r{ resolve(protocol, host_name, service_name, f, ec) };
+        _Check_error_code(ec, __func__);
+        return r;
+    }
+    results_type resolve(const protocol_type& protocol, string_view host_name, string_view service_name, error_code& ec) { return resolve(protocol, host_name, service_name, flags{}, ec); }
+    results_type resolve(const protocol_type& protocol, string_view host_name, string_view service_name) { return resolve(protocol, host_name, service_name, flags{}); }
+
+    template <class CompletionToken>
+    auto async_resolve(const protocol_type& protocol, string_view host_name, string_view service_name, CompletionToken&& token);
+    template <class CompletionToken>
+    auto async_resolve(const protocol_type& protocol, string_view host_name, string_view service_name, flags f, CompletionToken&& token);
+
+    results_type resolve(const endpoint_type& e, error_code& ec)
+    {
+        char host_name[256];
+        char service_name[256];
+        int flags{ 0 };
+        if (e.protocol().type() == SOCK_DGRAM)
+            flags |= NI_DGRAM;
+        int result{ ::getnameinfo((const sockaddr*)e.data(), e.size(), host_name, 256, service_name, 256, flags) };
+        if (result != 0)
+        {
+            flags |= NI_NUMERICSERV;
+            result = ::getnameinfo((const sockaddr*)e.data(), e.size(), host_name, 256, service_name, 256, flags);
+        }
+        if (result != 0)
+        {
+            ec = make_error_code(static_cast<resolver_errc>(r));
+            return {};
+        }
+        results_type results{};
+        if (e.protocol().family() == AF_INET)
+            results.results_.emplace_back(*(sockaddr_in*)e.data(), host_name, service_name);
+        else
+            results.results_.emplace_back(*(sockaddr_in6*)e.data(), host_name, service_name);
+        return results;
+    }
+    results_type resolve(const endpoint_type& e)
+    {
+        error_code ec{};
+        auto r{ resolve(e, ec) };
+        _Check_error_code(ec, __func__);
+        return r;
+    }
+
+    template <class CompletionToken>
+    auto async_resolve(const endpoint_type& e, CompletionToken&& token);
+
+private:
+    io_context* ctx_;
+};
+
 template <class Allocator>
-basic_string<char, char_traits<char>, Allocator> host_name(const Allocator&);
+inline basic_string<char, char_traits<char>, Allocator> host_name(const Allocator& a, error_code& ec)
+{
+    char buffer[257];
+    if (::gethostname(buffer, 256) != 0)
+        ec = error_code{ ::WSAGetLastError(), generic_category() };
+    buffer[256] = '\0';
+    return basic_string{ buffer, a };
+}
 template <class Allocator>
-basic_string<char, char_traits<char>, Allocator> host_name(const Allocator&, error_code&);
+inline basic_string<char, char_traits<char>, Allocator> host_name(const Allocator& a)
+{
+    error_code ec{};
+    auto r{ host_name(a, ec) };
+    _Check_error_code(ec, __func__);
+    return r;
+}
+inline string host_name(error_code& ec) { return host_name<allocator<char>>({}, ec); }
+inline string host_name() { return host_name<allocator<char>>({}); }
 
-class tcp;
+class tcp
+{
+public:
+    using endpoint = basic_endpoint<tcp>;
+    using resolver = basic_resolver<tcp>;
+    using socket = basic_stream_socket<tcp>;
+    using acceptor = basic_socket_acceptor<tcp>;
+    using iostream = basic_socket_iostream<tcp>;
 
-bool operator==(const tcp& a, const tcp& b);
-bool operator!=(const tcp& a, const tcp& b);
+    class no_delay
+    {
+    };
 
-class udp;
+    static constexpr tcp v4() noexcept { return tcp{ AF_INET }; }
+    static constexpr tcp v6() noexcept { return tcp{ AF_INET6 }; }
 
-bool operator==(const udp& a, const udp& b);
-bool operator!=(const udp& a, const udp& b);
+    constexpr int family() const noexcept { return family_; }
+    constexpr int type() const noexcept { return SOCK_STREAM; }
+    constexpr int protocol() const noexcept { return IPPROTO_TCP; }
 
-class v6_only;
+private:
+    constexpr explicit tcp(int family) : family_(family) {}
+
+    int family_;
+};
+
+inline bool operator==(const tcp& a, const tcp& b) { return a.family() == b.family(); }
+inline bool operator!=(const tcp& a, const tcp& b) { return !(a == b); }
+
+class udp
+{
+public:
+    using endpoint = basic_endpoint<udp>;
+    using resolver = basic_resolver<udp>;
+    using socket = basic_datagram_socket<udp>;
+
+    static constexpr udp v4() noexcept { return udp{ AF_INET }; }
+    static constexpr udp v6() noexcept { return udp{ AF_INET6 }; }
+
+    constexpr int family() const noexcept { return family_; }
+    constexpr int type() const noexcept { return SOCK_DGRAM; }
+    constexpr int protocol() const noexcept { return IPPROTO_UDP; }
+
+private:
+    constexpr explicit udp(int family) : family_(family) {}
+
+    int family_;
+};
+
+inline bool operator==(const udp& a, const udp& b) { return a.family() == b.family(); }
+inline bool operator!=(const udp& a, const udp& b) { return !(a == b); }
+
+class v6_only
+{
+};
 
 namespace unicast
 {
-class hops;
-}
+class hops
+{
+};
+} // namespace unicast
 
 namespace multicast
 {
-class join_group;
-class leave_group;
-class outbound_interface;
-class hops;
-class enable_loopback;
+class join_group
+{
+};
+class leave_group
+{
+};
+class hops
+{
+};
+class enable_loopback
+{
+};
+
+class outbound_interface
+{
+public:
+    explicit outbound_interface(const address_v4& network_interface) noexcept : v4_value_(network_interface._Addr()), v6_value_(0) {}
+    explicit outbound_interface(unsigned int network_interface) noexcept : v4_value_(), v6_value_(network_interface) {}
+
+    template <class Protocol>
+    int level(const Protocol& p) const noexcept
+    {
+        return p.family() == AF_INET ? IPPROTO_IP : IPPROTO_IPV6;
+    }
+    template <class Protocol>
+    int name(const Protocol& p) const noexcept
+    {
+        return p.family() == AF_INET ? IP_MULTICAST_IF : IPV6_MULTICAST_IF;
+    }
+    template <class Protocol>
+    const void* data(const Protocol& p) const noexcept
+    {
+        return p.family() == AF_INET ? &v4_value_ : &v6_value_;
+    }
+    template <class Protocol>
+    size_t size(const Protocol& p) const noexcept
+    {
+        return p.family() == AF_INET ? sizeof(v4_value_) : sizeof(v6_value_);
+    }
+
+private:
+    ::in_addr v4_value_;
+    unsigned int v6_value_;
+};
 } // namespace multicast
 } // namespace ip
 } // namespace v1
@@ -899,11 +1303,34 @@ struct is_error_condition_enum<experimental::net::v1::ip::resolver_errc> : publi
 };
 
 template <>
-struct hash<experimental::net::v1::ip::address>;
+struct hash<experimental::net::v1::ip::address_v4>
+{
+    size_t operator()(const experimental::net::v1::ip::address_v4& a) const
+    {
+        auto bytes{ a.to_bytes() };
+        return _Hash_array_representation(bytes.data(), bytes.size());
+    }
+};
 template <>
-struct hash<experimental::net::v1::ip::address_v4>;
+struct hash<experimental::net::v1::ip::address_v6>
+{
+    size_t operator()(const experimental::net::v1::ip::address_v6& a) const
+    {
+        auto bytes{ a.to_bytes() };
+        return _Hash_array_representation(bytes.data(), bytes.size());
+    }
+};
 template <>
-struct hash<experimental::net::v1::ip::address_v6>;
+struct hash<experimental::net::v1::ip::address>
+{
+    size_t operator()(const experimental::net::v1::ip::address& a) const
+    {
+        if (a.is_v4())
+            return hash<experimental::net::v1::ip::address_v4>{}(a.to_v4());
+        else
+            return hash<experimental::net::v1::ip::address_v6>{}(a.to_v6());
+    }
+};
 } // namespace std
 
 #endif
