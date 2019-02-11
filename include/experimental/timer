@@ -79,12 +79,7 @@ public:
             while (Clock::now() < expiry_)
                 this_thread::sleep_for(traits_type::to_wait_duration(expiry_)); }, allocator<void>{});
     }
-    void wait()
-    {
-        error_code ec{};
-        wait(ec);
-        _Check_error_code(ec, __func__);
-    }
+    void wait() { _CHECK_ERROR_CODE_INVOKE(wait(ec)); }
 
     template <class CompletionToken>
     auto async_wait(CompletionToken&& token);

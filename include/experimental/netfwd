@@ -18,6 +18,17 @@ inline void _Check_error_code(error_code& ec, const char* what)
         throw system_error{ ec, what };
 }
 
+#define _CHECK_ERROR_CODE_INVOKE(invoke) \
+    error_code ec{};                     \
+    invoke;                              \
+    _Check_error_code(ec, __func__)
+
+#define _CHECK_ERROR_CODE_INVOKE_FUNC(invoke) \
+    error_code ec{};                          \
+    auto r{ invoke };                         \
+    _Check_error_code(ec, __func__);          \
+    return r
+
 class execution_context;
 
 template <class T, class Executor>

@@ -152,13 +152,7 @@ constexpr address_v4 make_address_v4(v4_mapped_t, const address_v6& a)
     return address_v4{ v4b };
 }
 address_v4 make_address_v4(const char*, error_code&) noexcept;
-inline address_v4 make_address_v4(const char* str)
-{
-    error_code ec{};
-    auto r{ make_address_v4(str, ec) };
-    _Check_error_code(ec, __func__);
-    return r;
-}
+inline address_v4 make_address_v4(const char* str) { _CHECK_ERROR_CODE_INVOKE_FUNC(make_address_v4(str, ec)); }
 inline address_v4 make_address_v4(const string& str, error_code& ec) noexcept { return make_address_v4(str.c_str(), ec); }
 inline address_v4 make_address_v4(const string& str) { return make_address_v4(str.c_str()); }
 inline address_v4 make_address_v4(string_view str, error_code& ec) noexcept { return make_address_v4(static_cast<string>(str), ec); }
@@ -314,13 +308,7 @@ constexpr address_v6 make_address_v6(v4_mapped_t, const address_v4& a) noexcept
     return address_v6{ v6b };
 }
 address_v6 make_address_v6(const char*, error_code&) noexcept;
-inline address_v6 make_address_v6(const char* str)
-{
-    error_code ec{};
-    auto r{ make_address_v6(str, ec) };
-    _Check_error_code(ec, __func__);
-    return r;
-}
+inline address_v6 make_address_v6(const char* str) { _CHECK_ERROR_CODE_INVOKE_FUNC(make_address_v6(str, ec)); }
 inline address_v6 make_address_v6(const string& str, error_code& ec) noexcept { return make_address_v6(str.c_str(), ec); }
 inline address_v6 make_address_v6(const string& str) { return make_address_v6(str.c_str()); }
 inline address_v6 make_address_v6(string_view str, error_code& ec) noexcept { return make_address_v6(static_cast<string>(str), ec); }
@@ -427,13 +415,7 @@ inline basic_ostream<CharT, Traits>& operator<<(basic_ostream<CharT, Traits>& s,
 }
 
 address make_address(const char*, error_code&) noexcept;
-inline address make_address(const char* str)
-{
-    error_code ec{};
-    auto r{ make_address(str, ec) };
-    _Check_error_code(ec, __func__);
-    return r;
-}
+inline address make_address(const char* str) { _CHECK_ERROR_CODE_INVOKE_FUNC(make_address(str, ec)); }
 inline address make_address(const string& str, error_code& ec) noexcept { return make_address(str.c_str(), ec); }
 inline address make_address(const string& str) { return make_address(str.c_str()); }
 inline address make_address(string_view str, error_code& ec) noexcept { return make_address(static_cast<string>(str), ec); }
@@ -667,13 +649,7 @@ private:
 inline network_v4 make_network_v4(const address_v4& addr, int prefix_len) { return network_v4{ addr, prefix_len }; }
 inline network_v4 make_network_v4(const address_v4& addr, const address_v4& mask) { return network_v4{ addr, mask }; }
 network_v4 make_network_v4(const string&, error_code&) noexcept;
-inline network_v4 make_network_v4(const string& str)
-{
-    error_code ec{};
-    auto r{ make_network_v4(str, ec) };
-    _Check_error_code(ec, __func__);
-    return r;
-}
+inline network_v4 make_network_v4(const string& str) { _CHECK_ERROR_CODE_INVOKE_FUNC(make_network_v4(str, ec)); }
 inline network_v4 make_network_v4(const char* str, error_code& ec) noexcept { return make_network_v4(string{ str }, ec); }
 inline network_v4 make_network_v4(const char* str) { return make_network_v4(string{ str }); }
 inline network_v4 make_network_v4(string_view str, error_code& ec) noexcept { return make_network_v4(static_cast<string>(str), ec); }
@@ -755,13 +731,7 @@ private:
 
 inline network_v6 make_network_v6(const address_v6& addr, int prefix_len) { return network_v6{ addr, prefix_len }; }
 network_v6 make_network_v6(const string&, error_code&) noexcept;
-inline network_v6 make_network_v6(const string& str)
-{
-    error_code ec{};
-    auto r{ make_network_v6(str, ec) };
-    _Check_error_code(ec, __func__);
-    return r;
-}
+inline network_v6 make_network_v6(const string& str) { _CHECK_ERROR_CODE_INVOKE_FUNC(make_network_v6(str, ec)); }
 inline network_v6 make_network_v6(const char* str, error_code& ec) noexcept { return make_network_v6(string{ str }, ec); }
 inline network_v6 make_network_v6(const char* str) { return make_network_v6(string{ str }); }
 inline network_v6 make_network_v6(string_view str, error_code& ec) noexcept { return make_network_v6(static_cast<string>(str), ec); }
@@ -1065,13 +1035,7 @@ public:
         ::freeaddrinfo(result);
         return results;
     }
-    results_type resolve(string_view host_name, string_view service_name, flags f)
-    {
-        error_code ec{};
-        auto r{ resolve(host_name, service_name, f, ec) };
-        _Check_error_code(ec, __func__);
-        return r;
-    }
+    results_type resolve(string_view host_name, string_view service_name, flags f) { _CHECK_ERROR_CODE_INVOKE_FUNC(resolve(host_name, service_name, f, ec)); }
     results_type resolve(string_view host_name, string_view service_name, error_code& ec) { return resolve(host_name, service_name, flags{}, ec); }
     results_type resolve(string_view host_name, string_view service_name) { return resolve(host_name, service_name, flags{}); }
 
@@ -1109,13 +1073,7 @@ public:
         ::freeaddrinfo(result);
         return results;
     }
-    results_type resolve(const protocol_type& protocol, string_view host_name, string_view service_name, flags f)
-    {
-        error_code ec{};
-        auto r{ resolve(protocol, host_name, service_name, f, ec) };
-        _Check_error_code(ec, __func__);
-        return r;
-    }
+    results_type resolve(const protocol_type& protocol, string_view host_name, string_view service_name, flags f) { _CHECK_ERROR_CODE_INVOKE_FUNC(resolve(protocol, host_name, service_name, f, ec)); }
     results_type resolve(const protocol_type& protocol, string_view host_name, string_view service_name, error_code& ec) { return resolve(protocol, host_name, service_name, flags{}, ec); }
     results_type resolve(const protocol_type& protocol, string_view host_name, string_view service_name) { return resolve(protocol, host_name, service_name, flags{}); }
 
@@ -1149,13 +1107,7 @@ public:
             results.results_.emplace_back(*(sockaddr_in6*)e.data(), host_name, service_name);
         return results;
     }
-    results_type resolve(const endpoint_type& e)
-    {
-        error_code ec{};
-        auto r{ resolve(e, ec) };
-        _Check_error_code(ec, __func__);
-        return r;
-    }
+    results_type resolve(const endpoint_type& e) { _CHECK_ERROR_CODE_INVOKE_FUNC(resolve(e, ec)); }
 
     template <class CompletionToken>
     auto async_resolve(const endpoint_type& e, CompletionToken&& token);
@@ -1176,10 +1128,7 @@ inline basic_string<char, char_traits<char>, Allocator> host_name(const Allocato
 template <class Allocator>
 inline basic_string<char, char_traits<char>, Allocator> host_name(const Allocator& a)
 {
-    error_code ec{};
-    auto r{ host_name(a, ec) };
-    _Check_error_code(ec, __func__);
-    return r;
+    _CHECK_ERROR_CODE_INVOKE_FUNC(host_name(a, ec));
 }
 inline string host_name(error_code& ec) { return host_name<allocator<char>>({}, ec); }
 inline string host_name() { return host_name<allocator<char>>({}); }

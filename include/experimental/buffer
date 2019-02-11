@@ -49,15 +49,16 @@ inline const error_category& stream_category() noexcept
 inline error_code make_error_code(stream_errc e) noexcept { return error_code{ static_cast<int>(e), stream_category() }; }
 inline error_condition make_error_condition(stream_errc e) noexcept { return error_condition{ static_cast<int>(e), stream_category() }; }
 
-class mutable_buffer
+template <class T>
+class _Buffer_base
 {
 public:
-    mutable_buffer() noexcept : data_(nullptr), size_(0) {}
-    mutable_buffer(void* p, size_t n) noexcept : data_(p), size_(n) {}
+    _Buffer_base() noexcept : data_(nullptr), size_(0) {}
+    _Buffer_base(T* p, size_t n) noexcept : data_(p), size_(n) {}
 
-    void* data() const noexcept { return data_; }
+    T* data() const noexcept { return data_; }
     size_t size() const noexcept { return size_; }
-    mutable_buffer& operator+=(size_t n) noexcept
+    _Buffer_base& operator+=(size_t n) noexcept
     {
         n = min(n, size_);
         data_ = static_cast<char*>(data_) + n;
@@ -65,46 +66,30 @@ public:
         return *this;
     }
 
-    friend mutable_buffer operator+(const mutable_buffer& b, size_t n) noexcept
+    friend _Buffer_base operator+(const _Buffer_base& b, size_t n) noexcept
     {
         n = min(n, size_);
-        return mutable_buffer{ static_cast<char*>(b.data_) + n, b.size_ - n };
+        return _Buffer_base{ static_cast<char*>(b.data_) + n, b.size_ - n };
     }
-    friend mutable_buffer operator+(size_t n, const mutable_buffer& b) noexcept { return b + n; }
+    friend _Buffer_base operator+(size_t n, const _Buffer_base& b) noexcept { return b + n; }
 
 private:
-    void* data_;
+    T* data_;
     size_t size_;
-
-    friend class const_buffer;
 };
-class const_buffer
+
+class mutable_buffer : public _Buffer_base<void>
 {
 public:
-    const_buffer() noexcept : data_(nullptr), size_(0) {}
-    const_buffer(const void* p, size_t n) noexcept : data_(p), size_(n) {}
-    const_buffer(const mutable_buffer& b) noexcept : data_(b.data_), size_(b.size_) {}
+    using _Buffer_base<void>::_Buffer_base;
+};
 
-    const void* data() const noexcept { return data_; }
-    size_t size() const noexcept { return size_; }
-    const_buffer& operator+=(size_t n) noexcept
-    {
-        n = min(n, size_);
-        data_ = static_cast<const char*>(data_) + n;
-        size_ -= n;
-        return *this;
-    }
+class const_buffer : public _Buffer_base<const void>
+{
+public:
+    using _Buffer_base<const void>::_Buffer_base;
 
-    friend const_buffer operator+(const const_buffer& b, size_t n) noexcept
-    {
-        n = min(n, size_);
-        return const_buffer{ static_cast<const char*>(b.data_) + n, b.size_ - n };
-    }
-    friend const_buffer operator+(size_t n, const const_buffer& b) noexcept { return b + n; }
-
-private:
-    const void* data_;
-    size_t size_;
+    const_buffer(const mutable_buffer& b) noexcept : _Buffer_base<const void>(b.data(), b.size()) {}
 };
 
 template <class T, class = void, class = void>
@@ -335,81 +320,58 @@ inline const_buffer buffer(basic_string_view<CharT, Traits> data, size_t n) noex
     return buffer(begin(data) != end(data) ? addressof(*begin(data)) : nullptr, (end(data) - begin(data)) * sizeof(*begin(data)));
 }
 
-template <class T, class Allocator>
-class dynamic_vector_buffer
+template <class Container>
+class _Dynamic_buffer_base
 {
 public:
     using const_buffers_type = const_buffer;
     using mutable_buffers_type = mutable_buffer;
 
-    explicit dynamic_vector_buffer(vector<T, Allocator>& vec) noexcept : vec_(vec), size_(vec.size()), max_size_(vec.max_size()) {}
-    dynamic_vector_buffer(vector<T, Allocator>& vec, size_t maximum_size) noexcept : vec_(vec), size_(vec.size()), max_size_(maximum_size) {}
-    dynamic_vector_buffer(dynamic_vector_buffer&&) = default;
+    explicit _Dynamic_buffer_base(Container& c) noexcept : c_(c), size_(c.size()), max_size_(c.max_size()) {}
+    _Dynamic_buffer_base(Container& c, size_t maximum_size) noexcept : c_(c), size_(c.size()), max_size_(maximum_size) {}
+    _Dynamic_buffer_base(_Dynamic_buffer_base&&) = default;
 
     size_t size() const noexcept { return size_; }
     size_t max_size() const noexcept { return max_size_; }
-    size_t capacity() const noexcept { return vec_.capacity(); }
-    const_buffers_type data() const noexcept { return buffer(vec_, size_); }
+    size_t capacity() const noexcept { return c_.capacity(); }
+    const_buffers_type data() const noexcept { return buffer(c_, size_); }
     mutable_buffers_type prepare(size_t n)
     {
-        vec_.resize(size_ + n);
-        return buffer(buffer(vec_) + size_, n);
+        if (size_ + n > max_size_)
+            throw length_error{ "size exceeded" };
+        c_.resize(size_ + n);
+        return buffer(buffer(c_) + size_, n);
     }
     void commit(size_t n)
     {
-        size_ += min(n, vec_.size() - size_);
-        vec_.resize(size_);
+        size_ += min(n, c_.size() - size_);
+        c_.resize(size_);
     }
     void consume(size_t n)
     {
         size_t m = min(n, size_);
-        vec_.erase(vec_.begin(), vec_.begin() + m);
+        c_.erase(c_.begin(), c_.begin() + m);
         size_ -= m;
     }
 
 private:
-    vector<T, Allocator>& vec_;
+    Container& c_;
     size_t size_;
     const size_t max_size_;
 };
 
-template <class CharT, class Traits, class Allocator>
-class dynamic_string_buffer
+template <class T, class Allocator>
+class dynamic_vector_buffer : public _Dynamic_buffer_base<vector<T, Allocator>>
 {
 public:
-    using const_buffers_type = const_buffer;
-    using mutable_buffers_type = mutable_buffer;
+    using _Dynamic_buffer_base<vector<T, Allocator>>::_Dynamic_buffer_base;
+};
 
-    explicit dynamic_string_buffer(basic_string<CharT, Traits, Allocator>& str) noexcept : str_(str), size_(str.size()), max_size_(str.max_size()) {}
-    dynamic_string_buffer(basic_string<CharT, Traits, Allocator>& str, size_t maximum_size) noexcept : str_(str), size_(str.size()), max_size_(maximum_size) {}
-    dynamic_string_buffer(dynamic_string_buffer&&) = default;
-
-    size_t size() const noexcept { return size_; }
-    size_t max_size() const noexcept { return max_size_; }
-    size_t capacity() const noexcept { return str_.capacity(); }
-    const_buffers_type data() const noexcept { buffer(str_, size_); }
-    mutable_buffers_type prepare(size_t n)
-    {
-        str_.resize(size_ + n);
-        return buffer(buffer(str_) + size_, n);
-    }
-
-    void commit(size_t n) noexcept
-    {
-        size_ += min(n, str_.size() - size_);
-        str_.resize(size_);
-    }
-    void consume(size_t n)
-    {
-        size_t m = min(n, size_);
-        str_.erase(0, m);
-        size_ -= m;
-    }
-
-private:
-    basic_string<CharT, Traits, Allocator>& str_;
-    size_t size_;
-    const size_t max_size_;
+template <class CharT, class Traits, class Allocator>
+class dynamic_string_buffer : public _Dynamic_buffer_base<basic_string<CharT, Traits, Allocator>>
+{
+public:
+    using _Dynamic_buffer_base<basic_string<CharT, Traits, Allocator>>::_Dynamic_buffer_base;
 };
 
 template <class T, class Allocator>
@@ -434,7 +396,7 @@ inline dynamic_string_buffer<CharT, Traits, Allocator> dynamic_buffer(basic_stri
     return dynamic_string_buffer<CharT, Traits, Allocator>{ str, n };
 }
 
-constexpr size_t _Default_max_transfer_size{ 65536 };
+inline constexpr size_t _Default_max_transfer_size{ 65536 };
 
 class transfer_all
 {
@@ -492,7 +454,7 @@ struct _Prepared_buffers
     size_t count;
 };
 
-template <class Buffer, class Buffers, class Buffer_Iterator>
+template <class Buffer, class Buffers>
 class _Consuming_buffers
 {
 public:
@@ -509,8 +471,8 @@ public:
     prepared_buffers_type prepare(size_t max_size)
     {
         prepared_buffers_type result;
-        Buffer_Iterator next{ buffer_sequence_begin(buffers_) };
-        Buffer_Iterator end{ buffer_sequence_end(buffers_) };
+        auto next{ buffer_sequence_begin(buffers_) };
+        auto end{ buffer_sequence_end(buffers_) };
         advance(next, next_elem_);
         size_t elem_offset{ next_elem_offset_ };
         while (next != end && max_size > 0 && result.count < result.max_buffers)
@@ -526,11 +488,11 @@ public:
         return result;
     }
 
-    void consume(std::size_t size)
+    void consume(size_t size)
     {
         total_consumed_ += size;
-        Buffer_Iterator next{ buffer_sequence_begin(buffers_) };
-        Buffer_Iterator end{ buffer_sequence_end(buffers_) };
+        auto next{ buffer_sequence_begin(buffers_) };
+        auto end{ buffer_sequence_end(buffers_) };
         advance(next, next_elem_);
         while (next != end && size > 0)
         {
@@ -564,7 +526,7 @@ template <class SyncReadStream, class MutableBufferSequence, class CompletionCon
 inline size_t read(SyncReadStream& stream, const MutableBufferSequence& buffers, CompletionCondition completion_condition, error_code& ec)
 {
     ec = error_code{};
-    _Consuming_buffers<mutable_buffer, MutableBufferSequence, decltype(buffer_sequence_begin(buffers))> tmp{ buffers };
+    _Consuming_buffers<mutable_buffer, MutableBufferSequence> tmp{ buffers };
     while (!tmp.empty())
     {
         if (size_t max_size{ completion_condition(ec, tmp.total_consumed()) })
@@ -586,18 +548,12 @@ inline size_t read(SyncReadStream& stream, const MutableBufferSequence& buffers,
 template <class SyncReadStream, class MutableBufferSequence, class CompletionCondition, class = enable_if_t<is_mutable_buffer_sequence_v<MutableBufferSequence>>>
 inline size_t read(SyncReadStream& stream, const MutableBufferSequence& buffers, CompletionCondition completion_condition)
 {
-    error_code ec;
-    size_t r{ read(stream, buffers, completion_condition, ec) };
-    _Check_error_code(ec, __func__);
-    return r;
+    _CHECK_ERROR_CODE_INVOKE_FUNC(read(stream, buffers, completion_condition, ec));
 }
 template <class SyncReadStream, class MutableBufferSequence, class = enable_if_t<is_mutable_buffer_sequence_v<MutableBufferSequence>>>
 inline size_t read(SyncReadStream& stream, const MutableBufferSequence& buffers)
 {
-    error_code ec;
-    size_t r{ read(stream, buffers, transfer_all{}, ec) };
-    _Check_error_code(ec, __func__);
-    return r;
+    _CHECK_ERROR_CODE_INVOKE_FUNC(read(stream, buffers, transfer_all{}, ec));
 }
 
 template <class SyncReadStream, class DynamicBuffer, class CompletionCondition, class = enable_if_t<is_dynamic_buffer_v<DynamicBuffer>>>
@@ -626,18 +582,12 @@ inline size_t read(SyncReadStream& stream, DynamicBuffer&& b, error_code& ec)
 template <class SyncReadStream, class DynamicBuffer, class CompletionCondition, class = enable_if_t<is_dynamic_buffer_v<DynamicBuffer>>>
 inline size_t read(SyncReadStream& stream, DynamicBuffer&& b, CompletionCondition completion_condition)
 {
-    error_code ec;
-    size_t r{ read(stream, forward<DynamicBuffer>(b), completion_condition, ec) };
-    _Check_error_code(ec, __func__);
-    return r;
+    _CHECK_ERROR_CODE_INVOKE_FUNC(read(stream, forward<DynamicBuffer>(b), completion_condition, ec));
 }
 template <class SyncReadStream, class DynamicBuffer, class = enable_if_t<is_dynamic_buffer_v<DynamicBuffer>>>
 inline size_t read(SyncReadStream& stream, DynamicBuffer&& b)
 {
-    error_code ec;
-    size_t r{ read(stream, forward<DynamicBuffer>(b), transfer_all{}, ec) };
-    _Check_error_code(ec, __func__);
-    return r;
+    _CHECK_ERROR_CODE_INVOKE_FUNC(read(stream, forward<DynamicBuffer>(b), transfer_all{}, ec));
 }
 
 template <class AsyncReadStream, class MutableBufferSequence, class CompletionCondition, class CompletionToken, class = enable_if_t<is_mutable_buffer_sequence_v<MutableBufferSequence>>>
@@ -660,7 +610,7 @@ template <class SyncWriteStream, class ConstBufferSequence, class CompletionCond
 inline size_t write(SyncWriteStream& stream, const ConstBufferSequence& buffers, CompletionCondition completion_condition, error_code& ec)
 {
     ec = error_code{};
-    _Consuming_buffers<const_buffer, ConstBufferSequence, decltype(buffer_sequence_begin(buffers))> tmp{ buffers };
+    _Consuming_buffers<const_buffer, ConstBufferSequence> tmp{ buffers };
     while (!tmp.empty())
     {
         if (size_t max_size{ completion_condition(ec, tmp.total_consumed()) })
@@ -682,18 +632,12 @@ inline size_t write(SyncWriteStream& stream, const ConstBufferSequence& buffers,
 template <class SyncWriteStream, class ConstBufferSequence, class CompletionCondition, class = enable_if_t<is_const_buffer_sequence_v<ConstBufferSequence>>>
 inline size_t write(SyncWriteStream& stream, const ConstBufferSequence& buffers, CompletionCondition completion_condition)
 {
-    error_code ec;
-    size_t r{ write(stream, buffers, completion_condition, ec) };
-    _Check_error_code(ec, __func__);
-    return r;
+    _CHECK_ERROR_CODE_INVOKE_FUNC(write(stream, buffers, completion_condition, ec));
 }
 template <class SyncWriteStream, class ConstBufferSequence, class = enable_if_t<is_const_buffer_sequence_v<ConstBufferSequence>>>
 inline size_t write(SyncWriteStream& stream, const ConstBufferSequence& buffers)
 {
-    error_code ec;
-    size_t r{ write(stream, buffers, transfer_all{}, ec) };
-    _Check_error_code(ec, __func__);
-    return r;
+    _CHECK_ERROR_CODE_INVOKE_FUNC(write(stream, buffers, transfer_all{}, ec));
 }
 
 template <class SyncWriteStream, class DynamicBuffer, class CompletionCondition, class = enable_if_t<is_dynamic_buffer_v<DynamicBuffer>>>
@@ -712,18 +656,12 @@ inline size_t write(SyncWriteStream& stream, DynamicBuffer&& b, error_code& ec)
 template <class SyncWriteStream, class DynamicBuffer, class CompletionCondition, class = enable_if_t<is_dynamic_buffer_v<DynamicBuffer>>>
 inline size_t write(SyncWriteStream& stream, DynamicBuffer&& b, CompletionCondition completion_condition)
 {
-    error_code ec;
-    size_t r{ write(stream, forward<DynamicBuffer>(b), completion_condition, ec) };
-    _Check_error_code(ec, __func__);
-    return r;
+    _CHECK_ERROR_CODE_INVOKE_FUNC(write(stream, forward<DynamicBuffer>(b), completion_condition, ec));
 }
 template <class SyncWriteStream, class DynamicBuffer, class = enable_if_t<is_dynamic_buffer_v<DynamicBuffer>>>
 inline size_t write(SyncWriteStream& stream, DynamicBuffer&& b)
 {
-    error_code ec;
-    size_t r{ write(stream, forward<DynamicBuffer>(b), transfer_all{}, ec) };
-    _Check_error_code(ec, __func__);
-    return r;
+    _CHECK_ERROR_CODE_INVOKE_FUNC(write(stream, forward<DynamicBuffer>(b), transfer_all{}, ec));
 }
 
 template <class AsyncWriteStream, class ConstBufferSequence, class CompletionCondition, class CompletionToken, class = enable_if_t<is_const_buffer_sequence_v<ConstBufferSequence>>>
@@ -1053,10 +991,7 @@ inline size_t read_until(SyncReadStream& s, DynamicBuffer&& b, char delim, error
 template <class SyncReadStream, class DynamicBuffer>
 inline size_t read_until(SyncReadStream& s, DynamicBuffer&& b, char delim)
 {
-    error_code ec;
-    size_t r{ read_until(s, forward<DynamicBuffer>(b), delim, ec) };
-    _Check_error_code(ec, __func__);
-    return r;
+    _CHECK_ERROR_CODE_INVOKE_FUNC(read_until(s, forward<DynamicBuffer>(b), delim, ec));
 }
 
 template <typename Iterator1, typename Iterator2>
@@ -1128,10 +1063,7 @@ inline size_t read_until(SyncReadStream& s, DynamicBuffer&& b, string_view delim
 template <class SyncReadStream, class DynamicBuffer>
 inline size_t read_until(SyncReadStream& s, DynamicBuffer&& b, string_view delim)
 {
-    error_code ec;
-    size_t r{ read_until(s, forward<DynamicBuffer>(b), delim, ec) };
-    _Check_error_code(ec, __func__);
-    return r;
+    _CHECK_ERROR_CODE_INVOKE_FUNC(read_until(s, forward<DynamicBuffer>(b), delim, ec));
 }
 
 template <class AsyncReadStream, class DynamicBuffer, class CompletionToken>
