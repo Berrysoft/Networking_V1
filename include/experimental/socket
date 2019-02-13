@@ -366,7 +366,9 @@ public:
 
     native_handle_type release(error_code&)
     {
-        return socket_;
+        native_handle_type h{ socket_ };
+        socket_ = INVALID_SOCKET;
+        return h;
     }
     native_handle_type release() { _CHECK_ERROR_CODE_INVOKE_FUNC(release(ec)); }
 
@@ -956,28 +958,62 @@ public:
     using duration = typename clock_type::duration;
     using wait_traits_type = WaitTraits;
 
-    basic_socket_streambuf();
-    explicit basic_socket_streambuf(basic_stream_socket<protocol_type> s);
+    basic_socket_streambuf() : socket_(_Context()) {}
+    explicit basic_socket_streambuf(basic_stream_socket<protocol_type> s) : socket_(move(s)) {}
     basic_socket_streambuf(const basic_socket_streambuf&) = delete;
-    basic_socket_streambuf(basic_socket_streambuf&& rhs);
+    basic_socket_streambuf(basic_socket_streambuf&& rhs) : socket_(move(rhs.socket_)), ec_(rhs.ec_), expiry_(rhs.expiry_)
+    {
+        rhs.ec_.clear();
+        rhs.expiry_ = time_point::max();
+    }
 
-    virtual ~basic_socket_streambuf();
+    virtual ~basic_socket_streambuf() { overflow(); }
 
     basic_socket_streambuf& operator=(const basic_socket_streambuf&) = delete;
-    basic_socket_streambuf& operator=(basic_socket_streambuf&& rhs);
+    basic_socket_streambuf& operator=(basic_socket_streambuf&& rhs)
+    {
+        close();
+        socket_ = move(rhs.socket_);
+        ec_ = rhs.ec_;
+        rhs.ec_.clear();
+        expiry_ = rhs.expiry_;
+        rhs.expiry_ = time_point::max();
+        return *this;
+    }
 
-    basic_socket_streambuf* connect(const endpoint_type& e);
+    basic_socket_streambuf* connect(const endpoint_type& e)
+    {
+        socket_.close(ec_);
+        if (!ec_) return nullptr;
+        socket_.open(e.protocol(), ec_);
+        if (!ec_) return nullptr;
+        int r{ ::connect(socket_.native_handle(), e.data(), e.size()) };
+        if (r != 0)
+            ec = error_code{ ::WSAGetLastError(), generic_category() };
+        if (!ec_) return nullptr;
+        return this;
+    }
     template <class... Args>
-    basic_socket_streambuf* connect(Args&&...);
+    basic_socket_streambuf* connect(Args&&...)
+    {
+        endpoint_type e{ protocol_type::resolver(_Context()).resolve(forward<Args>(args)...) };
+        return connect(e);
+    }
 
-    basic_socket_streambuf* close();
+    basic_socket_streambuf* close()
+    {
+        overflow(traits_type::eof());
+        socket_.close(ec_);
+        if (!ec_) return nullptr;
+        return this;
+    }
 
-    basic_socket<protocol_type>& socket();
-    error_code error() const;
+    basic_socket<protocol_type>& socket() { return socket_; }
+    error_code error() const { return ec_; }
 
-    time_point expiry() const;
+    time_point expiry() const { return expiry_; }
     void expires_at(const time_point& t);
-    void expires_after(const duration& d);
+    void expires_after(const duration& d) { expires_at(clock_type::now() + d); }
 
 protected:
     virtual int_type underflow() override;
@@ -987,9 +1023,15 @@ protected:
     virtual streambuf* setbuf(char_type* s, streamsize n) override;
 
 private:
+    static io_context& _Context()
+    {
+        static io_context ctx;
+        return ctx;
+    }
+
     basic_stream_socket<protocol_type> socket_;
     error_code ec_;
-    time_point expiry_;
+    time_point expiry_{ time_point::max() };
 };
 
 template <class Protocol, class Clock = chrono::steady_clock, class WaitTraits = wait_traits<Clock>>
