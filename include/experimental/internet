@@ -2,6 +2,7 @@
 #define NET_INTERNET
 
 #include <experimental/io_context>
+#include <experimental/socket>
 
 #include <WinSock2.h>
 #include <Ws2tcpip.h>
@@ -1142,8 +1143,21 @@ public:
     using acceptor = basic_socket_acceptor<tcp>;
     using iostream = basic_socket_iostream<tcp>;
 
-    class no_delay
+    class no_delay : public _Option_base<int>
     {
+    public:
+        using _Option_base<int>::_Option_base;
+
+        template <class Protocol>
+        int level(const Protocol&) const noexcept
+        {
+            return IPPROTO_TCP;
+        }
+        template <class Protocol>
+        int name(const Protocol&) const noexcept
+        {
+            return TCP_NODELAY;
+        }
     };
 
     static constexpr tcp v4() noexcept { return tcp{ AF_INET }; }
@@ -1185,37 +1199,147 @@ private:
 inline bool operator==(const udp& a, const udp& b) { return a.family() == b.family(); }
 inline bool operator!=(const udp& a, const udp& b) { return !(a == b); }
 
-class v6_only
+class v6_only : public _Option_base<int>
 {
+public:
+    using _Option_base<int>::_Option_base;
+
+    template <class Protocol>
+    int level(const Protocol&) const noexcept
+    {
+        return IPPROTO_IPV6;
+    }
+    template <class Protocol>
+    int name(const Protocol&) const noexcept
+    {
+        return IPV6_V6ONLY;
+    }
 };
 
 namespace unicast
 {
-class hops
+class hops : public _Option_base<int>
 {
+public:
+    using _Option_base<int>::_Option_base;
+
+    template <class Protocol>
+    int level(const Protocol& p) const noexcept
+    {
+        return p.family() == AF_INET ? IPPROTO_IP : IPPROTO_IPV6;
+    }
+    template <class Protocol>
+    int name(const Protocol& p) const noexcept
+    {
+        return p.family() == AF_INET ? IP_TTL : IPV6_UNICAST_HOPS;
+    }
 };
 } // namespace unicast
 
 namespace multicast
 {
-class join_group
-{
-};
-class leave_group
-{
-};
-class hops
-{
-};
-class enable_loopback
-{
+union _Group_t {
+    ::ip_mreq v4_value_;
+    ::ipv6_mreq v6_value_;
 };
 
-class outbound_interface
+constexpr _Group_t _Make_Group_t(::ip_mreq val) { return _Group_t{ val }; }
+constexpr _Group_t _Make_Group_t(::ipv6_mreq val)
+{
+    _Group_t r{};
+    r.v6_value_ = val;
+    return r;
+}
+
+class join_group : public _Option_base<_Group_t>
 {
 public:
-    explicit outbound_interface(const address_v4& network_interface) noexcept : v4_value_(network_interface._Addr()), v6_value_(0) {}
-    explicit outbound_interface(unsigned int network_interface) noexcept : v4_value_(), v6_value_(network_interface) {}
+    explicit join_group(const address_v4& a, const address_v4& i = address_v4::any()) : _Option_base<_Group_t>(_Make_Group_t(::ip_mreq{ a._Addr(), i._Addr() })) {}
+    explicit join_group(const address_v6& a, unsigned long i = 0) : _Option_base<_Group_t>(_Make_Group_t(::ipv6_mreq{ a._Addr(), i })) {}
+    explicit join_group(const address& a)
+        : _Option_base<_Group_t>(a.is_v4() ? _Make_Group_t(::ip_mreq{ a.to_v4()._Addr(), address_v4::any()._Addr() }) : _Make_Group_t(::ipv6_mreq{ a.to_v6()._Addr(), 0 })) {}
+
+    template <class Protocol>
+    int level(const Protocol& p) const noexcept
+    {
+        return p.family() == AF_INET ? IPPROTO_IP : IPPROTO_IPV6;
+    }
+    template <class Protocol>
+    int name(const Protocol& p) const noexcept
+    {
+        return p.family() == AF_INET ? IP_ADD_MEMBERSHIP : IPV6_JOIN_GROUP;
+    }
+};
+class leave_group : public _Option_base<_Group_t>
+{
+public:
+    explicit leave_group(const address_v4& a, const address_v4& i = address_v4::any()) : _Option_base<_Group_t>(_Make_Group_t(::ip_mreq{ a._Addr(), i._Addr() })) {}
+    explicit leave_group(const address_v6& a, unsigned long i = 0) : _Option_base<_Group_t>(_Make_Group_t(::ipv6_mreq{ a._Addr(), i })) {}
+    explicit leave_group(const address& a)
+        : _Option_base<_Group_t>(a.is_v4() ? _Make_Group_t(::ip_mreq{ a.to_v4()._Addr(), address_v4::any()._Addr() }) : _Make_Group_t(::ipv6_mreq{ a.to_v6()._Addr(), 0 })) {}
+
+    template <class Protocol>
+    int level(const Protocol& p) const noexcept
+    {
+        return p.family() == AF_INET ? IPPROTO_IP : IPPROTO_IPV6;
+    }
+    template <class Protocol>
+    int name(const Protocol& p) const noexcept
+    {
+        return p.family() == AF_INET ? IP_DROP_MEMBERSHIP : IPV6_LEAVE_GROUP;
+    }
+};
+class hops : public _Option_base<int>
+{
+public:
+    using _Option_base<int>::_Option_base;
+
+    template <class Protocol>
+    int level(const Protocol& p) const noexcept
+    {
+        return p.family() == AF_INET ? IPPROTO_IP : IPPROTO_IPV6;
+    }
+    template <class Protocol>
+    int name(const Protocol& p) const noexcept
+    {
+        return p.family() == AF_INET ? IP_MULTICAST_TTL : IPV6_MULTICAST_HOPS;
+    }
+};
+class enable_loopback : public _Option_base<int>
+{
+public:
+    using _Option_base<int>::_Option_base;
+
+    template <class Protocol>
+    int level(const Protocol& p) const noexcept
+    {
+        return p.family() == AF_INET ? IPPROTO_IP : IPPROTO_IPV6;
+    }
+    template <class Protocol>
+    int name(const Protocol& p) const noexcept
+    {
+        return p.family() == AF_INET ? IP_MULTICAST_LOOP : IPV6_MULTICAST_LOOP;
+    }
+};
+
+union _Outbound_interface_t {
+    ::in_addr v4_value_;
+    unsigned int v6_value_;
+};
+
+constexpr _Outbound_interface_t _Make_Outbound_interface_t(::in_addr val) { return _Outbound_interface_t{ val }; }
+constexpr _Outbound_interface_t _Make_Outbound_interface_t(unsigned int val)
+{
+    _Outbound_interface_t r{};
+    r.v6_value_ = val;
+    return r;
+}
+
+class outbound_interface : public _Option_base<_Outbound_interface_t>
+{
+public:
+    explicit outbound_interface(const address_v4& network_interface) noexcept : _Option_base<_Outbound_interface_t>(_Make_Outbound_interface_t(network_interface._Addr())) {}
+    explicit outbound_interface(unsigned int network_interface) noexcept : _Option_base<_Outbound_interface_t>(_Make_Outbound_interface_t(network_interface)) {}
 
     template <class Protocol>
     int level(const Protocol& p) const noexcept
@@ -1227,20 +1351,6 @@ public:
     {
         return p.family() == AF_INET ? IP_MULTICAST_IF : IPV6_MULTICAST_IF;
     }
-    template <class Protocol>
-    const void* data(const Protocol& p) const noexcept
-    {
-        return p.family() == AF_INET ? &v4_value_ : &v6_value_;
-    }
-    template <class Protocol>
-    size_t size(const Protocol& p) const noexcept
-    {
-        return p.family() == AF_INET ? sizeof(v4_value_) : sizeof(v6_value_);
-    }
-
-private:
-    ::in_addr v4_value_;
-    unsigned int v6_value_;
 };
 } // namespace multicast
 } // namespace ip

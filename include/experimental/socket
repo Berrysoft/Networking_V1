@@ -48,42 +48,43 @@ inline const error_category& socket_category() noexcept
 inline error_code make_error_code(socket_errc e) noexcept { return error_code{ static_cast<int>(e), socket_category() }; }
 inline error_condition make_error_condition(socket_errc e) noexcept { return error_condition{ static_cast<int>(e), socket_category() }; }
 
+template <typename Base>
+class _Option_base
+{
+public:
+    _Option_base() noexcept = default;
+    _Option_base(Base val) : value_(val) {}
+
+    template <class Protocol>
+    void* data(const Protocol&) noexcept
+    {
+        return &value_;
+    }
+    template <class Protocol>
+    const void* data(const Protocol&) const noexcept
+    {
+        return &value_;
+    }
+    template <class Protocol>
+    size_t size(const Protocol&) const noexcept
+    {
+        return sizeof(value_);
+    }
+    template <class Protocol>
+    void resize(const Protocol&, size_t s)
+    {
+        if (s != sizeof(value_))
+            throw length_error{ "size exceeded" };
+    }
+
+protected:
+    Base value_;
+};
+
 class socket_base
 {
 public:
-    template <typename Base>
-    class _Option_base
-    {
-    public:
-        _Option_base() noexcept = default;
-        _Option_base(Base val) : value_(val) {}
-
-        template <class Protocol>
-        void* data(const Protocol&) noexcept
-        {
-            return &value_;
-        }
-        template <class Protocol>
-        const void* data(const Protocol&) const noexcept
-        {
-            return &value_;
-        }
-        template <class Protocol>
-        size_t size(const Protocol&) const noexcept
-        {
-            return sizeof(value_);
-        }
-        template <class Protocol>
-        void resize(const Protocol&, size_t s)
-        {
-            if (s != sizeof(value_))
-                throw length_error{ "size exceeded" };
-        }
-
-    protected:
-        Base value_;
-    };
-    class broadcast : _Option_base<int>
+    class broadcast : public _Option_base<int>
     {
     public:
         using _Option_base<int>::_Option_base;
@@ -99,7 +100,7 @@ public:
             return SO_BROADCAST;
         }
     };
-    class debug : _Option_base<int>
+    class debug : public _Option_base<int>
     {
     public:
         using _Option_base<int>::_Option_base;
@@ -115,7 +116,7 @@ public:
             return SO_DEBUG;
         }
     };
-    class do_not_route : _Option_base<int>
+    class do_not_route : public _Option_base<int>
     {
     public:
         using _Option_base<int>::_Option_base;
@@ -131,7 +132,7 @@ public:
             return SO_DONTROUTE;
         }
     };
-    class keep_alive : _Option_base<int>
+    class keep_alive : public _Option_base<int>
     {
     public:
         using _Option_base<int>::_Option_base;
@@ -147,7 +148,7 @@ public:
             return SO_KEEPALIVE;
         }
     };
-    class out_of_band_inline : _Option_base<int>
+    class out_of_band_inline : public _Option_base<int>
     {
     public:
         using _Option_base<int>::_Option_base;
@@ -163,7 +164,7 @@ public:
             return SO_OOBINLINE;
         }
     };
-    class receive_buffer_size : _Option_base<int>
+    class receive_buffer_size : public _Option_base<int>
     {
     public:
         using _Option_base<int>::_Option_base;
@@ -179,7 +180,7 @@ public:
             return SO_RCVBUF;
         }
     };
-    class receive_low_watermark : _Option_base<int>
+    class receive_low_watermark : public _Option_base<int>
     {
     public:
         using _Option_base<int>::_Option_base;
@@ -195,7 +196,7 @@ public:
             return SO_RCVLOWAT;
         }
     };
-    class reuse_address : _Option_base<int>
+    class reuse_address : public _Option_base<int>
     {
     public:
         using _Option_base<int>::_Option_base;
@@ -211,7 +212,7 @@ public:
             return SO_REUSEADDR;
         }
     };
-    class send_buffer_size : _Option_base<int>
+    class send_buffer_size : public _Option_base<int>
     {
     public:
         using _Option_base<int>::_Option_base;
@@ -227,7 +228,7 @@ public:
             return SO_SNDBUF;
         }
     };
-    class send_low_watermark : _Option_base<int>
+    class send_low_watermark : public _Option_base<int>
     {
     public:
         using _Option_base<int>::_Option_base;
@@ -244,7 +245,7 @@ public:
         }
     };
 
-    class linger : _Option_base<::linger>
+    class linger : public _Option_base<::linger>
     {
     public:
         using _Option_base<::linger>::_Option_base;
@@ -958,13 +959,16 @@ public:
     using duration = typename clock_type::duration;
     using wait_traits_type = WaitTraits;
 
-    basic_socket_streambuf() : socket_(_Context()) {}
-    explicit basic_socket_streambuf(basic_stream_socket<protocol_type> s) : socket_(move(s)) {}
+    basic_socket_streambuf() : socket_(_Context()) { _Init_buffers(); }
+    explicit basic_socket_streambuf(basic_stream_socket<protocol_type> s) : socket_(move(s)) { _Init_buffers(); }
     basic_socket_streambuf(const basic_socket_streambuf&) = delete;
     basic_socket_streambuf(basic_socket_streambuf&& rhs) : socket_(move(rhs.socket_)), ec_(rhs.ec_), expiry_(rhs.expiry_)
     {
+        get_buffer_.swap(rhs.get_buffer_);
+        put_buffer_.swap(rhs.put_buffer_);
         rhs.ec_.clear();
         rhs.expiry_ = time_point::max();
+        rhs._Init_buffers();
     }
 
     virtual ~basic_socket_streambuf() { overflow(); }
@@ -973,11 +977,14 @@ public:
     basic_socket_streambuf& operator=(basic_socket_streambuf&& rhs)
     {
         close();
+        get_buffer_.swap(rhs.get_buffer_);
+        put_buffer_.swap(rhs.put_buffer_);
         socket_ = move(rhs.socket_);
         ec_ = rhs.ec_;
         rhs.ec_.clear();
         expiry_ = rhs.expiry_;
         rhs.expiry_ = time_point::max();
+        rhs._Init_buffers();
         return *this;
     }
 
@@ -1012,15 +1019,124 @@ public:
     error_code error() const { return ec_; }
 
     time_point expiry() const { return expiry_; }
-    void expires_at(const time_point& t);
+    void expires_at(const time_point& t) { ecpiry_ = t; }
     void expires_after(const duration& d) { expires_at(clock_type::now() + d); }
 
 protected:
-    virtual int_type underflow() override;
+    virtual int_type underflow() override
+    {
+        if (gptr() != egptr())
+            return traits_type::eof();
+        while (true)
+        {
+            if (expiry_ < clock_type::now())
+            {
+                ec_ = make_error_code(errc::timed_out);
+                return traits_type::eof();
+            }
+            if (!socket_.native_non_blocking())
+                socket_.native_non_blocking(true, ec_);
+            DWORD bytes;
+            WSABUF buf{ get_buffer_.data(), get_buffer_.size() };
+            int r{ ::WSARecv(socket_.native_handle(), &buf, buf.len, &bytes, 0, nullptr, nullptr) };
+            if (r != 0)
+            {
+                ec_ = error_code{ ::WSAGetLastError(), generic_category() };
+                return traits_type::eof();
+            }
+            if (bytes > 0)
+            {
+                setg(get_buffer_.data(), get_buffer_.data() + _Putback_max, get_buffer_.data() + _Putback_max + bytes);
+                return traits_type::to_int_type(*gptr());
+            }
+            if (bytes == 0)
+            {
+                ec_ = make_error_code(stream_errc::eof);
+                return traits_type::eof();
+            }
+            if (!ec)
+                return traits_type::eof();
+            pollfd fds;
+            fds.fd = s;
+            fds.events = POLLIN;
+            fds.revents = 0;
+            r = ::WSAPoll(&fds, 1, chrono::duration_cast<chrono::milliseconds>(expiry_ - time_point::now()).count());
+            if (r != 0)
+                return traits_type::eof();
+        }
+    }
     virtual int_type pbackfail(int_type c = traits_type::eof()) override;
-    virtual int_type overflow(int_type c = traits_type::eof()) override;
-    virtual int sync() override;
-    virtual streambuf* setbuf(char_type* s, streamsize n) override;
+    virtual int_type overflow(int_type c = traits_type::eof()) override
+    {
+        char_type ch = traits_type::to_char_type(c);
+        const_buffer output_buffer;
+        if (put_buffer_.empty())
+        {
+            if (traits_type::eq_int_type(c, traits_type::eof()))
+                return traits_type::not_eof(c); // Nothing to do.
+            output_buffer = buffer(&ch, sizeof(char_type));
+        }
+        else
+        {
+            output_buffer = buffer(pbase(), (pptr() - pbase()) * sizeof(char_type));
+        }
+        while (output_buffer.size() > 0)
+        {
+            // Check if we are past the expiry time.
+            if (expiry_ < time_point::now())
+            {
+                ec_ = make_error_code(errc::timed_out);
+                return traits_type::eof();
+            }
+
+            // Try to complete the operation without blocking.
+            if (!socket_.native_non_blocking())
+                socket_.native_non_blocking(true, ec_);
+            DWORD bytes;
+            WSABUF buf{ get_buffer_.data(), get_buffer_.size() };
+            int r{ ::WSASend(socket_.native_handle(), &buf, buf.len, &bytes, 0, nullptr, nullptr) };
+            if (r != 0)
+            {
+                ec_ = error_code{ ::WSAGetLastError(), generic_category() };
+                return traits_type::eof();
+            }
+            if (bytes > 0)
+            {
+                output_buffer += static_cast<size_t>(bytes);
+                continue;
+            }
+            if (!ec)
+                return traits_type::eof();
+            pollfd fds;
+            fds.fd = s;
+            fds.events = POLLOUT;
+            fds.revents = 0;
+            r = ::WSAPoll(&fds, 1, chrono::duration_cast<chrono::milliseconds>(expiry_ - time_point::now()).count());
+            if (r != 0)
+                return traits_type::eof();
+        }
+        if (!put_buffer_.empty())
+        {
+            setp(put_buffer_.data(), put_buffer_.data() + put_buffer_.size());
+            if (traits_type::eq_int_type(c, traits_type::eof()))
+                return traits_type::not_eof(c);
+            *pptr() = ch;
+            pbump(1);
+        }
+        return c;
+    }
+    virtual int sync() override { return overflow(); }
+    virtual streambuf* setbuf(char_type* s, streamsize n) override
+    {
+        if (pptr() == pbase() && s == nullptr && n == 0)
+        {
+            put_buffer_.clear();
+            setp(nullptr, nullptr);
+            sync();
+            return this;
+        }
+        return nullptr;
+    }
 
 private:
     static io_context& _Context()
@@ -1029,6 +1145,18 @@ private:
         return ctx;
     }
 
+    inline constexpr size_t _Putback_max{ 8 };
+    void _Init_buffers()
+    {
+        setg(get_buffer_.data(), get_buffer_.data() + _Putback_max, get_buffer_.data() + _Putback_max);
+        if (put_buffer_.empty())
+            setp(nullptr, nullptr);
+        else
+            setp(put_buffer_.data(), put_buffer_.data() + put_buffer_.size());
+    }
+
+    vector<char> get_buffer_{ 512 };
+    vector<char> put_buffer_{ 512 };
     basic_stream_socket<protocol_type> socket_;
     error_code ec_;
     time_point expiry_{ time_point::max() };
@@ -1045,29 +1173,47 @@ public:
     using duration = typename clock_type::duration;
     using wait_traits_type = WaitTraits;
 
-    basic_socket_iostream();
-    explicit basic_socket_iostream(basic_stream_socket<protocol_type> s);
+    basic_socket_iostream() : basic_iostream<char>(&sb_), sb_() { setf(ios_base::unitbuf); }
+    explicit basic_socket_iostream(basic_stream_socket<protocol_type> s) : basic_iostream<char>(&sb_), sb_(move(s)) { setf(ios_base::unitbuf); }
     basic_socket_iostream(const basic_socket_iostream&) = delete;
-    basic_socket_iostream(basic_socket_iostream&& rhs);
+    basic_socket_iostream(basic_socket_iostream&& rhs) : basic_iostream<char>(&sb_), sb_(move(rhs.sb_)) { set_rdbuf(&sb_); }
     template <class... Args>
-    explicit basic_socket_iostream(Args&&... args);
+    explicit basic_socket_iostream(Args&&... args) : basic_iostream<char>(&sb_), sb_()
+    {
+        setf(ios_base::unitbuf);
+        connect(forward<Args>(args)...);
+    }
 
     basic_socket_iostream& operator=(const basic_socket_iostream&) = delete;
-    basic_socket_iostream& operator=(basic_socket_iostream&& rhs);
+    basic_socket_iostream& operator=(basic_socket_iostream&& rhs)
+    {
+        basic_iostream<char>::operator=(rhs);
+        sb_ = move(rhs.sb_);
+        return *this;
+    }
 
     template <class... Args>
-    void connect(Args&&... args);
+    void connect(Args&&... args)
+    {
+        if (!rdbuf()->connect(forward<Args>(args)...))
+        {
+            setstate(failbit);
+        }
+    }
 
-    void close();
+    void close() { rdbuf()->close(); }
 
-    basic_socket_streambuf<protocol_type, clock_type, wait_traits_type>* rdbuf() const;
+    basic_socket_streambuf<protocol_type, clock_type, wait_traits_type>* rdbuf() const
+    {
+        return const_cast<basic_socket_streambuf<protocol_type, clock_type, wait_traits_type>*>(addressof(sb_));
+    }
 
-    basic_socket<protocol_type>& socket();
-    error_code error() const;
+    basic_socket<protocol_type>& socket() { return rdbuf()->socket(); }
+    error_code error() const { return rdbuf()->error(); }
 
-    time_point expiry() const;
-    void expires_at(const time_point& t);
-    void expires_after(const duration& d);
+    time_point expiry() const { return rdbuf()->expiry(); }
+    void expires_at(const time_point& t) { rdbuf()->expires_at(t); }
+    void expires_after(const duration& d) { rdbuf()->expires_after(d); }
 
 private:
     basic_socket_streambuf<protocol_type, clock_type, wait_traits_type> sb_;
