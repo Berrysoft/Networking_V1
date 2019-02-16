@@ -3,6 +3,7 @@
 
 #include <experimental/timer>
 
+#include <MSWSock.h>
 #include <WinSock2.h>
 #include <istream>
 #include <streambuf>
@@ -598,7 +599,7 @@ public:
     }
     void shutdown(shutdown_type what) { _CHECK_ERROR_CODE_INVOKE(shutdown(what, ec)); }
 
-    endpoint_type remote_endpoint() const
+    endpoint_type remote_endpoint(error_code& ec) const
     {
         endpoint_type endpoint{};
         int endpoint_len{ endpoint.capacity() };
@@ -612,8 +613,7 @@ public:
         }
         return endpoint;
     }
-
-    endpoint_type remote_endpoint(error_code& ec) const;
+    endpoint_type remote_endpoint() const { _CHECK_ERROR_CODE_INVOKE_FUNC(remote_endpoint(ec)); }
 
     void connect(const endpoint_type& endpoint, error_code& ec)
     {
@@ -630,7 +630,23 @@ public:
     void connect(const endpoint_type& endpoint) { _CHECK_ERROR_CODE_INVOKE(connect(endpoint, ec)); }
 
     template <class CompletionToken>
-    auto async_connect(const endpoint_type& endpoint, CompletionToken&& token);
+    auto async_connect(const endpoint_type& endpoint, CompletionToken&& token)
+    {
+        async_completion<CompletionToken, void(error_code, typename Protocol::endpoint)> init{ token };
+        _Io_operation* op{ new _Io_operation{} };
+        op->overlapped.hEvent = ::WSACreateEvent();
+        op->operation = [token = forward<CompletionToken>(token), &endpoint](_Io_operation*, DWORD) { token(error_code{}, endpoint); };
+        BOOL r{ ::LPFN_CONNECTEX(native_handle(), endpoint.data(), endpoint.size(), nullptr, 0, nullptr, op) };
+        if (!r)
+        {
+            int err{ ::WSAGetLastError() };
+            if (err != ERROR_IO_PENDING)
+            {
+                token(error_code{ err, generic_category() }, {});
+            }
+        }
+        init.result.get();
+    }
 
 protected:
     using _Basic_socket<Protocol>::_Basic_socket;
@@ -694,9 +710,9 @@ public:
     template <class MutableBufferSequence>
     size_t receive(const MutableBufferSequence& buffers, message_flags flags, error_code& ec)
     {
-        vector<::WSABUF> buf{ _Native_buffers<mutable_buffer>(buffers) };
+        auto [buf, n]{ _Native_buffers<mutable_buffer>(buffers) };
         DWORD rec{ 0 };
-        int r{ ::WSARecv(native_handle(), buf.data(), buf.size(), &rec, &flags, nullptr, nullptr) };
+        int r{ ::WSARecv(native_handle(), buf.data(), n, &rec, &flags, nullptr, nullptr) };
         if (r != 0)
             ec = error_code{ ::WSAGetLastError(), generic_category() };
         return rec;
@@ -727,8 +743,8 @@ public:
         }
         else
         {
-            auto [data, n] = _Native_buffers<mutable_buffer>(buffers);
-            _Io_operation* op = new _Io_operation{};
+            auto [data, n]{ _Native_buffers<mutable_buffer>(buffers) };
+            _Io_operation* op{ new _Io_operation{} };
             op->overlapped.hEvent = ::WSACreateEvent();
             op->operation = [token = forward<CompletionToken>(token)](_Io_operation*, DWORD n) { token(error_code{}, n); };
             DWORD rec{ 0 };
@@ -753,9 +769,9 @@ public:
     template <class ConstBufferSequence>
     size_t send(const ConstBufferSequence& buffers, message_flags flags, error_code& ec)
     {
-        vector<::WSABUF> buf{ _Native_buffers<const_buffer>(buffers) };
+        auto [buf, n]{ _Native_buffers<const_buffer>(buffers) };
         DWORD s{ 0 };
-        int r{ ::WSASend(native_handle(), buf.data(), buf.size(), &s, flags, nullptr, nullptr) };
+        int r{ ::WSASend(native_handle(), buf.data(), n, &s, flags, nullptr, nullptr) };
         if (r != 0)
             ec = error_code{ ::WSAGetLastError(), generic_category() };
         return s;
@@ -780,25 +796,18 @@ public:
     auto async_send(const ConstBufferSequence& buffers, message_flags flags, CompletionToken&& token)
     {
         async_completion<CompletionToken, void(error_code, size_t)> init{ token };
-        if (flags & socket_base::message_peek)
+        auto [data, n]{ _Native_buffers<const_buffer>(buffers) };
+        _Io_operation* op{ new _Io_operation{} };
+        op->overlapped.hEvent = ::WSACreateEvent();
+        op->operation = [token = forward<CompletionToken>(token)](_Io_operation*, DWORD n) { token(error_code{}, n); };
+        DWORD s{ 0 };
+        int r{ ::WSASend(native_handle(), data.data(), n, &s, flags, op, nullptr) };
+        if (r != 0)
         {
-            token(make_error_code(errc::invalid_argument), 0);
-        }
-        else
-        {
-            auto [data, n] = _Native_buffers<const_buffer>(buffers);
-            _Io_operation* op = new _Io_operation{};
-            op->overlapped.hEvent = ::WSACreateEvent();
-            op->operation = [token = forward<CompletionToken>(token)](_Io_operation*, DWORD n) { token(error_code{}, n); };
-            DWORD s{ 0 };
-            int r{ ::WSASend(native_handle(), data.data(), n, &s, flags, op, nullptr) };
-            if (r != 0)
+            int err = ::WSAGetLastError();
+            if (err != WSA_IO_PENDING)
             {
-                int err = ::WSAGetLastError();
-                if (err != WSA_IO_PENDING)
-                {
-                    token(error_code{ err, generic_category() }, 0);
-                }
+                token(error_code{ err, generic_category() }, 0);
             }
         }
         return init.result.get();
@@ -819,9 +828,9 @@ public:
     template <class MutableBufferSequence>
     size_t receive_from(const MutableBufferSequence& buffers, endpoint_type& sender, message_flags flags, error_code& ec)
     {
-        vector<::WSABUF> buf{ _Native_buffers<mutable_buffer>(buffers) };
+        auto [buf, n]{ _Native_buffers<mutable_buffer>(buffers) };
         DWORD rec{ 0 };
-        int r{ ::WSARecvFrom(native_handle(), buf.data(), buf.size(), &rec, flags, sender.data(), sender.size(), nullptr, nullptr) };
+        int r{ ::WSARecvFrom(native_handle(), buf.data(), n, &rec, flags, sender.data(), sender.size(), nullptr, nullptr) };
         if (r != 0)
             ec = error_code{ ::WSAGetLastError(), generic_category() };
         return rec;
@@ -843,7 +852,32 @@ public:
     }
 
     template <class MutableBufferSequence, class CompletionToken>
-    auto async_receive_from(const MutableBufferSequence& buffers, endpoint_type& sender, message_flags flags, CompletionToken&& token);
+    auto async_receive_from(const MutableBufferSequence& buffers, endpoint_type& sender, message_flags flags, CompletionToken&& token)
+    {
+        async_completion<CompletionToken, void(error_code, size_t)> init{ token };
+        if (flags & socket_base::message_peek)
+        {
+            token(make_error_code(errc::invalid_argument), 0);
+        }
+        else
+        {
+            auto [data, n]{ _Native_buffers<mutable_buffer>(buffers) };
+            _Io_operation* op{ new _Io_operation{} };
+            op->overlapped.hEvent = ::WSACreateEvent();
+            op->operation = [token = forward<CompletionToken>(token)](_Io_operation*, DWORD n) { token(error_code{}, n); };
+            DWORD rec{ 0 };
+            int r{ ::WSARecvFrom(native_handle(), buf.data(), n, &rec, flags, sender.data(), sender.size(), op, nullptr) };
+            if (r != 0)
+            {
+                int err = ::WSAGetLastError();
+                if (err != WSA_IO_PENDING)
+                {
+                    token(error_code{ err, generic_category() }, 0);
+                }
+            }
+        }
+        return init.result.get();
+    }
     template <class MutableBufferSequence, class CompletionToken>
     auto async_receive_from(const MutableBufferSequence& buffers, endpoint_type& sender, CompletionToken&& token)
     {
@@ -853,9 +887,9 @@ public:
     template <class ConstBufferSequence>
     size_t send_to(const ConstBufferSequence& buffers, const endpoint_type& recipient, message_flags flags, error_code& ec)
     {
-        vector<::WSABUF> buf{ _Native_buffers<const_buffer>(buffers) };
+        auto [buf, n]{ _Native_buffers<const_buffer>(buffers) };
         DWORD s{ 0 };
-        int r{ ::WSASendTo(native_handle(), buf.data(), buf.size(), &s, flags, sender.data(), sender.size(), nullptr, nullptr) };
+        int r{ ::WSASendTo(native_handle(), buf.data(), n, &s, flags, recipient.data(), recipient.size(), nullptr, nullptr) };
         if (r != 0)
             ec = error_code{ ::WSAGetLastError(), generic_category() };
         return s;
@@ -877,7 +911,25 @@ public:
     }
 
     template <class ConstBufferSequence, class CompletionToken>
-    auto async_send_to(const ConstBufferSequence& buffers, const endpoint_type& recipient, message_flags flags, CompletionToken&& token);
+    auto async_send_to(const ConstBufferSequence& buffers, const endpoint_type& recipient, message_flags flags, CompletionToken&& token)
+    {
+        async_completion<CompletionToken, void(error_code, size_t)> init{ token };
+        auto [data, n]{ _Native_buffers<const_buffer>(buffers) };
+        _Io_operation* op{ new _Io_operation{} };
+        op->overlapped.hEvent = ::WSACreateEvent();
+        op->operation = [token = forward<CompletionToken>(token)](_Io_operation*, DWORD n) { token(error_code{}, n); };
+        DWORD s{ 0 };
+        int r{ ::WSASendTo(native_handle(), buf.data(), n, &s, flags, recipient.data(), recipient.size(), op, nullptr) };
+        if (r != 0)
+        {
+            int err = ::WSAGetLastError();
+            if (err != WSA_IO_PENDING)
+            {
+                token(error_code{ err, generic_category() }, 0);
+            }
+        }
+        return init.result.get();
+    }
     template <class ConstBufferSequence, class CompletionToken>
     auto async_send_to(const ConstBufferSequence& buffers, const endpoint_type& recipient, CompletionToken&& token)
     {
@@ -959,14 +1011,45 @@ public:
         if (h != INVALID_SOCKET)
             return socket_type{ ctx, _Protocol(), h };
         else
+        {
+            ec = error_code{ ::WSAGetLastError(), generic_category() };
             return socket_type{ ctx };
+        }
     }
     socket_type accept(io_context& ctx) { _CHECK_ERROR_CODE_INVOKE_FUNC(accept(ctx, ec)); }
     socket_type accept(error_code& ec) { accept(_Context(), ec); }
     socket_type accept() { _CHECK_ERROR_CODE_INVOKE_FUNC(accept(ec)); }
 
     template <class CompletionToken>
-    auto async_accept(io_context& ctx, CompletionToken&& token);
+    auto async_accept(io_context& ctx, CompletionToken&& token)
+    {
+        async_completion<CompletionToken, void(error_code, socket_type)> init{ token };
+        native_handle_type h{ ::socket(_Protocol().family(), _Protocol().type(), _Protocol().protocol()) };
+        if (h != INVALID_SOCKET)
+        {
+            ::CreateIoCompletionPort(h, ctx._Native_handle(), 0, 0);
+            constexpr DWORD size{ _Protocol().family() == AF_INET ? sizeof(::sockaddr_in) : sizeof(::sockaddr_in6) } + 16;
+            char buf[2 * size];
+            DWORD rec;
+            _Io_operation* op{ new _Io_operation{} };
+            op->overlapped.hEvent = ::WSACreateEvent();
+            op->operation = [token = forward<CompletionToken>(token), h, &ctx, p = _Protocol()](_Io_operation*, DWORD) { token(error_code{}, socket_type{ ctx, p, h }); };
+            BOOL r{ ::AcceptEx(native_handle(), h.native_handle(), 0, size, size, &rec, op) };
+            if (!r)
+            {
+                int err{ ::WSAGetLastError() };
+                if (err != ERROR_IO_PENDING)
+                {
+                    token(error_code{ err, generic_category() }, socket_type{ ctx });
+                }
+            }
+        }
+        else
+        {
+            token(error_code{ ::WSAGetLastError(), generic_category() }, socket_type{ ctx });
+        }
+        return init.result.get();
+    }
     template <class CompletionToken>
     auto async_accept(CompletionToken&& token)
     {
@@ -984,6 +1067,7 @@ public:
         }
         else
         {
+            ec = error_code{ ::WSAGetLastError(), generic_category() };
             return socket_type{ ctx };
         }
     }
@@ -992,7 +1076,38 @@ public:
     socket_type accept(endpoint_type& endpoint) { _CHECK_ERROR_CODE_INVOKE_FUNC(accept(endpoint, ec)); }
 
     template <class CompletionToken>
-    auto async_accept(io_context& ctx, endpoint_type& endpoint, CompletionToken&& token);
+    auto async_accept(io_context& ctx, endpoint_type& endpoint, CompletionToken&& token)
+    {
+        async_completion<CompletionToken, void(error_code, socket_type)> init{ token };
+        native_handle_type h{ ::socket(_Protocol().family(), _Protocol().type(), _Protocol().protocol()) };
+        if (h != INVALID_SOCKET)
+        {
+            using sockaddr_t = conditional_t<_Protocol().family() == AF_INET, ::sockaddr_in, sockaddr_in6>;
+            constexpr DWORD size{ sizeof(sockaddr_t) } + 16;
+            char buf[2 * size];
+            DWORD rec;
+            _Io_operation* op{ new _Io_operation{} };
+            op->overlapped.hEvent = ::WSACreateEvent();
+            op->operation = [token = forward<CompletionToken>(token), h, &ctx, p = _Protocol()](_Io_operation*, DWORD) { token(error_code{}, socket_type{ ctx, p, h }); };
+            BOOL r{ ::AcceptEx(native_handle(), h.native_handle(), 0, size, size, &rec, op) };
+            if (!r)
+            {
+                int err{ ::WSAGetLastError() };
+                if (err != ERROR_IO_PENDING)
+                {
+                    token(error_code{ err, generic_category() }, socket_type{ ctx });
+                }
+            }
+            sockaddr_t local, remote;
+            ::GetAcceptExSockaddrs(buf, 0, size, size, &&local, sizeof(sockaddr_t), &&remote, sizeof(sockaddr_t));
+            endpoint = endpoint_type{ remote };
+        }
+        else
+        {
+            token(error_code{ ::WSAGetLastError(), generic_category() }, socket_type{ ctx });
+        }
+        return init.result.get();
+    }
     template <class CompletionToken>
     auto async_accept(endpoint_type& endpoint, CompletionToken&& token)
     {
@@ -1112,7 +1227,7 @@ protected:
             fds.fd = s;
             fds.events = POLLIN;
             fds.revents = 0;
-            r = ::WSAPoll(&fds, 1, chrono::duration_cast<chrono::milliseconds>(expiry_ - time_point::now()).count());
+            r = ::WSAPoll(&fds, 1, chrono::duration_cast<chrono::milliseconds>(wait_traits<clock_type>::to_wait_duration(expiry_)).count());
             if (r != 0)
                 return traits_type::eof();
         }
@@ -1163,7 +1278,7 @@ protected:
             fds.fd = s;
             fds.events = POLLOUT;
             fds.revents = 0;
-            r = ::WSAPoll(&fds, 1, chrono::duration_cast<chrono::milliseconds>(expiry_ - time_point::now()).count());
+            r = ::WSAPoll(&fds, 1, chrono::duration_cast<chrono::milliseconds>(wait_traits<clock_type>::to_wait_duration(expiry_)).count());
             if (r != 0)
                 return traits_type::eof();
         }
@@ -1360,7 +1475,28 @@ inline InputIterator connect(basic_socket<Protocol>& s, InputIterator first, Inp
 }
 
 template <class Protocol, class EndpointSequence, class ConnectCondition, class CompletionToken>
-inline auto async_connect(basic_socket<Protocol>& s, const EndpointSequence& endpoints, ConnectCondition c, CompletionToken&& token);
+inline auto async_connect(basic_socket<Protocol>& s, const EndpointSequence& endpoints, ConnectCondition c, CompletionToken&& token)
+{
+    async_completion<CompletionToken, void(error_code, typename Protocol::endpoint)> init{ token };
+    error_code ec{};
+    bool found{ false };
+    for (auto& ep : endpoints)
+    {
+        if (c(ec, ep))
+        {
+            found = true;
+            s.close(ec);
+            if (!ec)
+                s.open(ep.protocol(), ec);
+            if (!ec)
+                s.async_connect(ep, [token = forward<CompletionToken>(token), ep](error_code ec) { token(ec, ep); });
+        }
+    }
+    if (!found)
+        ec = make_error_code(socket_errc::not_found);
+    token(ec, typename Protocol::endpoint{});
+    return init.result.get();
+}
 template <class Protocol, class EndpointSequence, class CompletionToken>
 inline auto async_connect(basic_socket<Protocol>& s, const EndpointSequence& endpoints, CompletionToken&& token)
 {
@@ -1368,7 +1504,29 @@ inline auto async_connect(basic_socket<Protocol>& s, const EndpointSequence& end
 }
 
 template <class Protocol, class InputIterator, class ConnectCondition, class CompletionToken>
-inline auto async_connect(basic_socket<Protocol>& s, InputIterator first, InputIterator last, ConnectCondition c, CompletionToken&& token);
+inline auto async_connect(basic_socket<Protocol>& s, InputIterator first, InputIterator last, ConnectCondition c, CompletionToken&& token)
+{
+    async_completion<CompletionToken, void(error_code, typename Protocol::endpoint)> init{ token };
+    error_code ec{};
+    bool found{ false };
+    for (auto i{ first }; i != last; ++i)
+    {
+        typename Protocol::endpoint& ep{ *i };
+        if (c(ec, ep))
+        {
+            found = true;
+            s.close(ec);
+            if (!ec)
+                s.open(ep.protocol(), ec);
+            if (!ec)
+                s.async_connect(ep, [token = forward<CompletionToken>(token), ep](error_code ec) { token(ec, ep); });
+        }
+    }
+    if (!found)
+        ec = make_error_code(socket_errc::not_found);
+    token(ec, typename Protocol::endpoint{});
+    return init.result.get();
+}
 template <class Protocol, class InputIterator, class CompletionToken>
 inline auto async_connect(basic_socket<Protocol>& s, InputIterator first, InputIterator last, CompletionToken&& token)
 {

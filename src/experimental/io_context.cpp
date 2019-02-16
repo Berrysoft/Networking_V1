@@ -37,6 +37,7 @@ size_t io_context::poll_one()
 
 void io_context::stop()
 {
+    ::PostQueuedCompletionStatus(port_, 0, 0, nullptr);
     ::CloseHandle(port_);
     port_ = nullptr;
 }

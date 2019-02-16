@@ -49,7 +49,7 @@ public:
             if (running_in_this_thread())
             {
                 decay_t<Func> func{ forward<Func>(f) };
-                f();
+                func();
             }
             else
                 post(forward<Func>(f), a);
@@ -91,7 +91,7 @@ public:
     template <class Clock, class Duration>
     count_type run_one_until(const chrono::time_point<Clock, Duration>& abs_time)
     {
-        return _Do_one(chrono::duration_cast<chrono::milliseconds>(abs_time - time_point::now()).count());
+        return _Do_one(chrono::duration_cast<chrono::milliseconds>(wait_traits<Clock>::to_wait_duration(abs_time)).count());
     }
     template <class Rep, class Period>
     count_type run_one_for(const chrono::duration<Rep, Period>& rel_time)
@@ -119,7 +119,11 @@ public:
     template <class Rep, class Period>
     count_type run_for(const chrono::duration<Rep, Period>& rel_time)
     {
-        return run_until(chrono::steady_clock::now() + rel_time);
+        count_type n{ 0 };
+        while (run_one_for(rel_time))
+            if (n != numeric_limits<count_type>::max())
+                ++n;
+        return n;
     }
 
     count_type poll_one();
