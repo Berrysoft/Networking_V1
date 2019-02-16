@@ -296,9 +296,9 @@ public:
 
     enum class message_flags
     {
-        message_peek = 0x02, // MSG_PEEK
-        message_out_of_band = 0x01, // MSG_OOB
-        message_do_not_route = 0x04 // MSG_DONTROUTE
+        message_peek = MSG_PEEK,
+        message_out_of_band = MSG_OOB,
+        message_do_not_route = MSG_DONTROUTE
     };
     static constexpr message_flags message_peek{ message_flags::message_peek };
     static constexpr message_flags message_out_of_band{ message_flags::message_out_of_band };
@@ -332,10 +332,11 @@ public:
         else
         {
             protocol_ = protocol;
-            socket_ = ::socket(protocol.family(), protocol.type(), protocol.protocol());
+            socket_ = ::WSASocketA(protocol.family(), protocol.type(), protocol.protocol(), nullptr, 0, WSA_FLAG_OVERLAPPED);
             if (is_open())
             {
                 ec = error_code{};
+                ::CreateIoCompletionPort(socket_, ctx_->_Native_handle(), 0, 0);
             }
             else
             {
@@ -356,6 +357,7 @@ public:
             if (is_open())
             {
                 ec = error_code{};
+                ::CreateIoCompletionPort(socket_, ctx_->_Native_handle(), 0, 0);
             }
             else
             {
@@ -694,7 +696,7 @@ public:
     {
         vector<::WSABUF> buf{ _Native_buffers<mutable_buffer>(buffers) };
         DWORD rec{ 0 };
-        int r{ ::WSARecv(native_handle(), buf.data(), buf.size(), &rec, flags, nullptr, nullptr) };
+        int r{ ::WSARecv(native_handle(), buf.data(), buf.size(), &rec, &flags, nullptr, nullptr) };
         if (r != 0)
             ec = error_code{ ::WSAGetLastError(), generic_category() };
         return rec;
@@ -716,7 +718,32 @@ public:
     }
 
     template <class MutableBufferSequence, class CompletionToken>
-    auto async_receive(const MutableBufferSequence& buffers, message_flags flags, CompletionToken&& token);
+    auto async_receive(const MutableBufferSequence& buffers, message_flags flags, CompletionToken&& token)
+    {
+        async_completion<CompletionToken, void(error_code, size_t)> init{ token };
+        if (flags & socket_base::message_peek)
+        {
+            token(make_error_code(errc::invalid_argument), 0);
+        }
+        else
+        {
+            auto [data, n] = _Native_buffers<mutable_buffer>(buffers);
+            _Io_operation* op = new _Io_operation{};
+            op->overlapped.hEvent = ::WSACreateEvent();
+            op->operation = [token = forward<CompletionToken>(token)](_Io_operation*, DWORD n) { token(error_code{}, n); };
+            DWORD rec{ 0 };
+            int r{ ::WSARecv(native_handle(), data.data(), n, &rec, &flags, op, nullptr) };
+            if (r != 0)
+            {
+                int err = ::WSAGetLastError();
+                if (err != WSA_IO_PENDING)
+                {
+                    token(error_code{ err, generic_category() }, 0);
+                }
+            }
+        }
+        return init.result.get();
+    }
     template <class MutableBufferSequence, class CompletionToken>
     auto async_receive(const MutableBufferSequence& buffers, CompletionToken&& token)
     {
@@ -750,7 +777,32 @@ public:
     }
 
     template <class ConstBufferSequence, class CompletionToken>
-    auto async_send(const ConstBufferSequence& buffers, message_flags flags, CompletionToken&& token);
+    auto async_send(const ConstBufferSequence& buffers, message_flags flags, CompletionToken&& token)
+    {
+        async_completion<CompletionToken, void(error_code, size_t)> init{ token };
+        if (flags & socket_base::message_peek)
+        {
+            token(make_error_code(errc::invalid_argument), 0);
+        }
+        else
+        {
+            auto [data, n] = _Native_buffers<const_buffer>(buffers);
+            _Io_operation* op = new _Io_operation{};
+            op->overlapped.hEvent = ::WSACreateEvent();
+            op->operation = [token = forward<CompletionToken>(token)](_Io_operation*, DWORD n) { token(error_code{}, n); };
+            DWORD s{ 0 };
+            int r{ ::WSASend(native_handle(), data.data(), n, &s, flags, op, nullptr) };
+            if (r != 0)
+            {
+                int err = ::WSAGetLastError();
+                if (err != WSA_IO_PENDING)
+                {
+                    token(error_code{ err, generic_category() }, 0);
+                }
+            }
+        }
+        return init.result.get();
+    }
     template <class ConstBufferSequence, class CompletionToken>
     auto async_send(const ConstBufferSequence& buffers, CompletionToken&& token)
     {

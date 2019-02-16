@@ -200,7 +200,7 @@ inline typename Service::key_type& use_service(execution_context& ctx)
 template <class Service, class... Args>
 inline Service& make_service(execution_context& ctx, Args&&... args)
 {
-    return ctx.service_registry.add_service<Service>(make_unique<Service>(ctx, forward<Args>(args)...));
+    return ctx.service_registry_.add_service<Service>(make_unique<Service>(ctx, forward<Args>(args)...));
 }
 
 template <class Service>
@@ -533,7 +533,7 @@ class bad_executor : public exception
 {
 public:
     bad_executor() noexcept : exception() {}
-    const char* what() const noexcept override { return "Bad executor."; }
+    const char* what() const noexcept override { return "Bad executor"; }
 };
 
 class _Executor_impl_base

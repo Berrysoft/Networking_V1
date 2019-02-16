@@ -5,56 +5,23 @@
 
 #include <WinBase.h>
 #include <chrono>
+#include <functional>
 #include <limits>
-#include <memory>
-#include <optional>
-#include <queue>
-#include <vector>
 
 namespace std::experimental::net
 {
 inline namespace v1
 {
-struct _Handle_delete
+struct _Io_operation
 {
-    constexpr _Handle_delete() noexcept = default;
-    void operator()(HANDLE ptr) const { ::CloseHandle(ptr); }
+    ::OVERLAPPED overlapped;
+    function<void(_Io_operation*, DWORD)> operation;
 };
 
-using unique_handle = unique_ptr<void, _Handle_delete>;
-
-class _Io_operation : public OVERLAPPED
+template <class Data>
+struct _Io_data_operation : _Io_operation
 {
-public:
-    using operation_type = _Io_operation;
-    using func_type = void (*)(void*, _Io_operation*, const error_code&, size_t);
-
-    void complete(void* owner, const error_code& ec, size_t n) { func_(owner, this, ec, n); }
-    void destory() { func_(nullptr, this, error_code{}, 0); }
-
-protected:
-    _Io_operation(func_type func) : func_(func) { reset(); }
-    ~_Io_operation() {}
-
-    void reset()
-    {
-        Internal = 0;
-        InternalHigh = 0;
-        Offset = 0;
-        OffsetHigh = 0;
-        hEvent = 0;
-        ready_ = 0;
-    }
-
-private:
-    friend class io_context;
-
-    func_type func_;
-    long ready_;
-};
-
-class _Timer_queue_set
-{
+    Data data;
 };
 
 class io_context : public execution_context
@@ -71,53 +38,65 @@ public:
 
         bool running_in_this_thread() const noexcept;
 
-        io_context& context() const noexcept;
+        io_context& context() const noexcept { return *ctx_; }
 
         void on_work_started() const noexcept;
         void on_work_finished() const noexcept;
 
         template <class Func, class ProtoAllocator>
-        void dispatch(Func&& f, const ProtoAllocator& a) const;
+        void dispatch(Func&& f, const ProtoAllocator& a) const
+        {
+            if (running_in_this_thread())
+            {
+                decay_t<Func> func{ forward<Func>(f) };
+                f();
+            }
+            else
+                post(forward<Func>(f), a);
+        }
         template <class Func, class ProtoAllocator>
         void post(Func&& f, const ProtoAllocator& a) const;
         template <class Func, class ProtoAllocator>
-        void defer(Func&& f, const ProtoAllocator& a) const;
+        void defer(Func&& f, const ProtoAllocator& a) const
+        {
+            post(forward<Func>(f), a);
+        }
 
-        friend inline bool operator==(const executor_type& a, const executor_type& b) { return addressof(a.context()) == addressof(b.context()); }
+        friend inline bool operator==(const executor_type& a, const executor_type& b) { return a.ctx_ == b.ctx_; }
         friend inline bool operator!=(const executor_type& a, const executor_type& b) { return !(a == b); }
 
     private:
         friend class io_context;
 
-        explicit executor_type(io_context& ctx) : ctx_(addressof(ctx)) {}
+        explicit executor_type(io_context& ctx) : ctx_(&ctx) {}
 
         io_context* ctx_;
     };
 
     using count_type = size_t;
 
-    io_context() : io_context(-1) {}
-    explicit io_context(int concurrency_hint);
+    io_context() : io_context(0) {}
+    explicit io_context(int concurrency_hint) : concurrency_hint_(concurrency_hint < 0 ? 0 : concurrency_hint) { _Start(); }
     io_context(const io_context&) = delete;
     io_context& operator=(const io_context&) = delete;
 
-    executor_type get_executor() noexcept;
+    ~io_context() override { stop(); }
+
+    executor_type get_executor() noexcept { return executor_type{ *this }; }
+    HANDLE _Native_handle() noexcept { return port_; }
 
     count_type _Do_one(DWORD msec);
-    void _Work_started();
-    void _Work_finished();
 
-    void _Post_deferred_completions(queue<_Io_operation>& ops);
-
-    void _Update_timeout();
-
-    count_type run_one();
+    count_type run_one() { return _Do_one(INFINITE); }
     template <class Clock, class Duration>
-    count_type run_one_until(const chrono::time_point<Clock, Duration>& abs_time);
+    count_type run_one_until(const chrono::time_point<Clock, Duration>& abs_time)
+    {
+        return _Do_one(chrono::duration_cast<chrono::milliseconds>(abs_time - time_point::now()).count());
+    }
     template <class Rep, class Period>
     count_type run_one_for(const chrono::duration<Rep, Period>& rel_time)
     {
-        return run_one_until(chrono::steady_clock::now() + rel_time);
+        return _Do_one(chrono::duration_cast<chrono::milliseconds>(rel_time).count());
     }
 
     count_type run()
@@ -154,29 +133,18 @@ public:
     }
 
     void stop();
-    bool stopped() const noexcept;
-    void restart();
+    bool stopped() const noexcept { return port_; }
+    void restart()
+    {
+        stop();
+        _Start();
+    }
 
 private:
-    unique_handle iocp_;
-    long outstanding_work_;
-    mutable long stopped_;
-    long stop_event_posted_;
-    long shutdown_;
-    const DWORD gqcs_timeout_;
-    optional<thread> timer_thread_;
-    unique_handle waitable_timer_;
-    long dispatch_required_;
-    mutable mutex dispatch_mutex_;
-    _Timer_queue_set timer_queues_;
-    queue<_Io_operation> completed_ops_;
-    const int concurrency_hint_;
+    void _Start();
 
-    static constexpr long default_gqcs_timeout{ 500 };
-    static constexpr long max_timeout_msec{ 5 * 60 * 1000 };
-    static constexpr long max_timeout_usec{ max_timeout_msec * 1000 };
-    static constexpr long wake_for_dispatch{ 1 };
-    static constexpr long overlapped_contains_result{ 2 };
+    int concurrency_hint_;
+    HANDLE port_;
 };
 } // namespace v1
 } // namespace std::experimental::net
