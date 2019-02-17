@@ -4,9 +4,13 @@
 #include <experimental/executor>
 
 #include <WinBase.h>
+#include <algorithm>
 #include <chrono>
 #include <functional>
 #include <limits>
+#include <mutex>
+#include <thread>
+#include <vector>
 
 namespace std::experimental::net
 {
@@ -16,12 +20,6 @@ struct _Io_operation
 {
     ::OVERLAPPED overlapped;
     function<void(_Io_operation*, DWORD)> operation;
-};
-
-template <class Data>
-struct _Io_data_operation : _Io_operation
-{
-    Data data;
 };
 
 class io_context : public execution_context
@@ -36,7 +34,11 @@ public:
         executor_type& operator=(const executor_type& other) noexcept = default;
         executor_type& operator=(executor_type&& other) noexcept = default;
 
-        bool running_in_this_thread() const noexcept;
+        bool running_in_this_thread() const noexcept
+        {
+            lock_guard<mutex> lock{ ctx_->mtx_ };
+            return find(ctx_->call_stack_.begin(), ctx_->call_stack_.end(), this_thread::get_id()) != ctx_->call_stack_.end();
+        }
 
         io_context& context() const noexcept { return *ctx_; }
 
@@ -147,8 +149,12 @@ public:
 private:
     void _Start();
 
+    friend struct _Io_context_monitor;
+
     int concurrency_hint_;
     HANDLE port_;
+    mutable mutex mtx_;
+    vector<thread::id> call_stack_;
 };
 } // namespace v1
 } // namespace std::experimental::net

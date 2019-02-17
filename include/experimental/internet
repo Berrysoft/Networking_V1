@@ -116,9 +116,9 @@ public:
         char addr_str[256];
         const char* r{ ::inet_ntop(AF_INET, &addr_, addr_str, 256) };
         if (r)
-            return basic_string{ r, a };
+            return { r, a };
         else
-            return basic_string<char>{ a };
+            return { a };
     }
 
     static constexpr address_v4 any() noexcept { return address_v4{}; }
@@ -259,9 +259,9 @@ public:
         char addr_str[256];
         const char* r{ ::inet_ntop(AF_INET6, &addr_, addr_str, 256) };
         if (r)
-            return basic_string{ r, a };
+            return { r, a };
         else
-            return basic_string<char>{ a };
+            return { a };
     }
 
     static constexpr address_v6 any() noexcept { return address_v6{}; }
@@ -633,11 +633,6 @@ public:
         s << address_.to_string(a) << '/' << prefix_length_;
         return s.str();
     }
-    template <class CharT, class Traits>
-    friend basic_ostream<CharT, Traits>& operator<<(basic_ostream<CharT, Traits>& s, const network_v4& net)
-    {
-        return s << net.address_.to_string() << '/' << net.prefix_length_;
-    }
 
     friend constexpr bool operator==(const network_v4& a, const network_v4& b) noexcept { return a.address_ == b.address_ && a.prefix_length_ == b.prefix_length_; }
     friend constexpr bool operator!=(const network_v4& a, const network_v4& b) noexcept { return !(a == b); }
@@ -646,6 +641,12 @@ private:
     address_v4 address_;
     int prefix_length_;
 };
+
+template <class CharT, class Traits>
+inline basic_ostream<CharT, Traits>& operator<<(basic_ostream<CharT, Traits>& s, const network_v4& net)
+{
+    return s << net.to_string().c_str();
+}
 
 inline network_v4 make_network_v4(const address_v4& addr, int prefix_len) { return network_v4{ addr, prefix_len }; }
 inline network_v4 make_network_v4(const address_v4& addr, const address_v4& mask) { return network_v4{ addr, mask }; }
@@ -716,11 +717,6 @@ public:
         s << address_.to_string(a) << '/' << prefix_length_;
         return s.str();
     }
-    template <class CharT, class Traits>
-    friend basic_ostream<CharT, Traits>& operator<<(basic_ostream<CharT, Traits>& s, const network_v6& net)
-    {
-        return s << net.address_.to_string() << '/' << net.prefix_length_;
-    }
 
     friend constexpr bool operator==(const network_v6& a, const network_v6& b) noexcept { return a.address_ == b.address_ && a.prefix_length_ == b.prefix_length_; }
     friend constexpr bool operator!=(const network_v6& a, const network_v6& b) noexcept { return !(a == b); }
@@ -729,6 +725,12 @@ private:
     address_v6 address_;
     int prefix_length_;
 };
+
+template <class CharT, class Traits>
+inline basic_ostream<CharT, Traits>& operator<<(basic_ostream<CharT, Traits>& s, const network_v6& net)
+{
+    return s << net.to_string().c_str();
+}
 
 inline network_v6 make_network_v6(const address_v6& addr, int prefix_len) { return network_v6{ addr, prefix_len }; }
 network_v6 make_network_v6(const string&, error_code&) noexcept;
@@ -1041,9 +1043,12 @@ public:
     results_type resolve(string_view host_name, string_view service_name) { return resolve(host_name, service_name, flags{}); }
 
     template <class CompletionToken>
-    auto async_resolve(string_view host_name, string_view service_name, CompletionToken&& token);
-    template <class CompletionToken>
     auto async_resolve(string_view host_name, string_view service_name, flags f, CompletionToken&& token);
+    template <class CompletionToken>
+    auto async_resolve(string_view host_name, string_view service_name, CompletionToken&& token)
+    {
+        return async_resolve(host_name, service_name, flags{}, forward<CompletionToken>(token));
+    }
 
     results_type resolve(const protocol_type& protocol, string_view host_name, string_view service_name, flags f, error_code& ec)
     {
@@ -1079,9 +1084,12 @@ public:
     results_type resolve(const protocol_type& protocol, string_view host_name, string_view service_name) { return resolve(protocol, host_name, service_name, flags{}); }
 
     template <class CompletionToken>
-    auto async_resolve(const protocol_type& protocol, string_view host_name, string_view service_name, CompletionToken&& token);
-    template <class CompletionToken>
     auto async_resolve(const protocol_type& protocol, string_view host_name, string_view service_name, flags f, CompletionToken&& token);
+    template <class CompletionToken>
+    auto async_resolve(const protocol_type& protocol, string_view host_name, string_view service_name, CompletionToken&& token)
+    {
+        return async_resolve(protocol, host_name, service_name, flags{}, forward<CompletionToken>(token));
+    }
 
     results_type resolve(const endpoint_type& e, error_code& ec)
     {
@@ -1269,6 +1277,11 @@ public:
     {
         return p.family() == AF_INET ? IP_ADD_MEMBERSHIP : IPV6_JOIN_GROUP;
     }
+    template <class Protocol>
+    size_t size(const Protocol& p) const noexcept
+    {
+        return p.family() == AF_INET ? sizeof(::ip_mreq) : sizeof(::ipv6_mreq);
+    }
 };
 class leave_group : public _Option_base<_Group_t>
 {
@@ -1287,6 +1300,11 @@ public:
     int name(const Protocol& p) const noexcept
     {
         return p.family() == AF_INET ? IP_DROP_MEMBERSHIP : IPV6_LEAVE_GROUP;
+    }
+    template <class Protocol>
+    size_t size(const Protocol& p) const noexcept
+    {
+        return p.family() == AF_INET ? sizeof(::ip_mreq) : sizeof(::ipv6_mreq);
     }
 };
 class hops : public _Option_base<int>
@@ -1350,6 +1368,11 @@ public:
     int name(const Protocol& p) const noexcept
     {
         return p.family() == AF_INET ? IP_MULTICAST_IF : IPV6_MULTICAST_IF;
+    }
+    template <class Protocol>
+    size_t size(const Protocol& p) const noexcept
+    {
+        return p.family() == AF_INET ? sizeof(::in_addr) : sizeof(unsigned int);
     }
 };
 } // namespace multicast

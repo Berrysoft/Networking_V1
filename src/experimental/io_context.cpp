@@ -6,11 +6,29 @@ namespace std::experimental::net
 {
 inline namespace v1
 {
+struct _Io_context_monitor
+{
+    _Io_context_monitor(io_context& ctx) : ctx_(&ctx)
+    {
+        lock_guard<mutex> lock{ ctx_->mtx_ };
+        ctx_->call_stack_.push_back(this_thread::get_id());
+    }
+    ~_Io_context_monitor()
+    {
+        lock_guard<mutex> lock{ ctx_->mtx_ };
+        ctx_->call_stack_.erase(find(ctx_->call_stack_.begin(), ctx_->call_stack_.end(), this_thread::get_id()));
+    }
+
+private:
+    io_context* ctx_;
+};
+
 size_t io_context::_Do_one(DWORD msec)
 {
     DWORD n;
     ULONG_PTR key{ 0 };
     _Io_operation* p;
+    _Io_context_monitor mon{ *this };
     if (::GetQueuedCompletionStatus(port_, &n, &key, (LPOVERLAPPED*)&p, msec))
     {
         p->operation(p, n);
