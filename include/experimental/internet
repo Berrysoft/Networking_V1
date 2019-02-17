@@ -1023,17 +1023,20 @@ public:
         hints.ai_addrlen = 0;
         hints.ai_canonname = nullptr;
         hints.ai_next = nullptr;
-        ::addrinfo* result = nullptr;
+        ::addrinfo* result{ nullptr };
         int r{ ::getaddrinfo(host_name.empty() ? nullptr : static_cast<string>(host_name).c_str(), service_name.empty() ? nullptr : static_cast<string>(service_name).c_str(), &hints, &result) };
+        results_type results{};
         if (r != 0)
             ec = make_error_code(static_cast<resolver_errc>(r));
-        results_type results{};
-        for (::addrinfo* ptr{ result }; ptr; ptr = ptr->ai_next)
+        else
         {
-            if (ptr->ai_family == AF_INET)
-                results.results_.emplace_back(*(::sockaddr_in*)ptr->ai_addr, ptr->ai_canonname, service_name);
-            else
-                results.results_.emplace_back(*(::sockaddr_in6*)ptr->ai_addr, ptr->ai_canonname, service_name);
+            for (::addrinfo* ptr{ result }; ptr; ptr = ptr->ai_next)
+            {
+                if (ptr->ai_family == AF_INET)
+                    results.results_.emplace_back(*(::sockaddr_in*)ptr->ai_addr, ptr->ai_canonname, service_name);
+                else
+                    results.results_.emplace_back(*(::sockaddr_in6*)ptr->ai_addr, ptr->ai_canonname, service_name);
+            }
         }
         ::freeaddrinfo(result);
         return results;
@@ -1043,7 +1046,46 @@ public:
     results_type resolve(string_view host_name, string_view service_name) { return resolve(host_name, service_name, flags{}); }
 
     template <class CompletionToken>
-    auto async_resolve(string_view host_name, string_view service_name, flags f, CompletionToken&& token);
+    auto async_resolve(string_view host_name, string_view service_name, flags f, CompletionToken&& token)
+    {
+        async_completion<CompletionToken, void(error_code, results_type)> init{ token };
+        ::addrinfoexA hints;
+        hints.ai_flags = static_cast<int>(f);
+        hints.ai_family = AF_UNSPEC;
+        hints.ai_socktype = endpoint_type{}.protocol().type();
+        hints.ai_protocol = endpoint_type{}.protocol().protocol();
+        hints.ai_addr = nullptr;
+        hints.ai_addrlen = 0;
+        hints.ai_canonname = nullptr;
+        hints.ai_blob = nullptr;
+        hints.ai_bloblen = 0;
+        hints.ai_next = nullptr;
+        ::addrinfoexA* result{ nullptr };
+        _Io_operation* op{ new _Io_operation{} };
+        op->overlapped.hEvent = ::WSACreateEvent();
+        op->operation = [token = forward<CompletionToken>(token), &result](_Io_operation*, DWORD) {
+            results_type results{};
+            for (::addrinfoexA* ptr{ result }; ptr; ptr = ptr->ai_next)
+            {
+                if (ptr->ai_family == AF_INET)
+                    results.results_.emplace_back(*(::sockaddr_in*)ptr->ai_addr, ptr->ai_canonname, service_name);
+                else
+                    results.results_.emplace_back(*(::sockaddr_in6*)ptr->ai_addr, ptr->ai_canonname, service_name);
+            }
+            ::FreeAddrInfoEx(result);
+            token(error_code{}, results);
+        };
+        int r{ ::GetAddrInfoExA(host_name.empty() ? nullptr : static_cast<string>(host_name).c_str(), service_name.empty() ? nullptr : static_cast<string>(service_name).c_str(), NS_ALL, nullptr, &hints, &result, nullptr, op, nullptr, nullptr) };
+        if (r != 0)
+        {
+            int err{ ::WSAGetLastError() };
+            if (err != WSA_IO_PENDING)
+            {
+                token(make_error_code(static_cast<resolver_errc>(err));, {});
+            }
+        }
+        return init.result.get();
+    }
     template <class CompletionToken>
     auto async_resolve(string_view host_name, string_view service_name, CompletionToken&& token)
     {
@@ -1084,7 +1126,46 @@ public:
     results_type resolve(const protocol_type& protocol, string_view host_name, string_view service_name) { return resolve(protocol, host_name, service_name, flags{}); }
 
     template <class CompletionToken>
-    auto async_resolve(const protocol_type& protocol, string_view host_name, string_view service_name, flags f, CompletionToken&& token);
+    auto async_resolve(const protocol_type& protocol, string_view host_name, string_view service_name, flags f, CompletionToken&& token)
+    {
+        async_completion<CompletionToken, void(error_code, results_type)> init{ token };
+        ::addrinfoexA hints;
+        hints.ai_flags = static_cast<int>(f);
+        hints.ai_family = protocol.family();
+        hints.ai_socktype = protocol.type();
+        hints.ai_protocol = protocol.protocol();
+        hints.ai_addr = nullptr;
+        hints.ai_addrlen = 0;
+        hints.ai_canonname = nullptr;
+        hints.ai_blob = nullptr;
+        hints.ai_bloblen = 0;
+        hints.ai_next = nullptr;
+        ::addrinfoexA* result{ nullptr };
+        _Io_operation* op{ new _Io_operation{} };
+        op->overlapped.hEvent = ::WSACreateEvent();
+        op->operation = [token = forward<CompletionToken>(token), &result](_Io_operation*, DWORD) {
+            results_type results{};
+            for (::addrinfoexA* ptr{ result }; ptr; ptr = ptr->ai_next)
+            {
+                if (ptr->ai_family == AF_INET)
+                    results.results_.emplace_back(*(::sockaddr_in*)ptr->ai_addr, ptr->ai_canonname, service_name);
+                else
+                    results.results_.emplace_back(*(::sockaddr_in6*)ptr->ai_addr, ptr->ai_canonname, service_name);
+            }
+            ::FreeAddrInfoEx(result);
+            token(error_code{}, results);
+        };
+        int r{ ::GetAddrInfoExA(host_name.empty() ? nullptr : static_cast<string>(host_name).c_str(), service_name.empty() ? nullptr : static_cast<string>(service_name).c_str(), NS_ALL, nullptr, &hints, &result, nullptr, op, nullptr, nullptr) };
+        if (r != 0)
+        {
+            int err{ ::WSAGetLastError() };
+            if (err != WSA_IO_PENDING)
+            {
+                token(make_error_code(static_cast<resolver_errc>(err));, {});
+            }
+        }
+        return init.result.get();
+    }
     template <class CompletionToken>
     auto async_resolve(const protocol_type& protocol, string_view host_name, string_view service_name, CompletionToken&& token)
     {
@@ -1151,10 +1232,10 @@ public:
     using acceptor = basic_socket_acceptor<tcp>;
     using iostream = basic_socket_iostream<tcp>;
 
-    class no_delay : public _Option_base<int>
+    class no_delay : public _Option_map_base<int, bool>
     {
     public:
-        using _Option_base<int>::_Option_base;
+        using _Option_map_base<int, bool>::_Option_map_base;
 
         template <class Protocol>
         int level(const Protocol&) const noexcept
@@ -1207,10 +1288,10 @@ private:
 inline bool operator==(const udp& a, const udp& b) { return a.family() == b.family(); }
 inline bool operator!=(const udp& a, const udp& b) { return !(a == b); }
 
-class v6_only : public _Option_base<int>
+class v6_only : public _Option_map_base<int, bool>
 {
 public:
-    using _Option_base<int>::_Option_base;
+    using _Option_map_base<int, bool>::_Option_map_base;
 
     template <class Protocol>
     int level(const Protocol&) const noexcept
@@ -1226,10 +1307,10 @@ public:
 
 namespace unicast
 {
-class hops : public _Option_base<int>
+class hops : public _Option_map_base<int, int>
 {
 public:
-    using _Option_base<int>::_Option_base;
+    using _Option_map_base<int, int>::_Option_map_base;
 
     template <class Protocol>
     int level(const Protocol& p) const noexcept
@@ -1307,10 +1388,10 @@ public:
         return p.family() == AF_INET ? sizeof(::ip_mreq) : sizeof(::ipv6_mreq);
     }
 };
-class hops : public _Option_base<int>
+class hops : public _Option_map_base<int, int>
 {
 public:
-    using _Option_base<int>::_Option_base;
+    using _Option_map_base<int, int>::_Option_map_base;
 
     template <class Protocol>
     int level(const Protocol& p) const noexcept
@@ -1323,10 +1404,10 @@ public:
         return p.family() == AF_INET ? IP_MULTICAST_TTL : IPV6_MULTICAST_HOPS;
     }
 };
-class enable_loopback : public _Option_base<int>
+class enable_loopback : public _Option_map_base<int, bool>
 {
 public:
-    using _Option_base<int>::_Option_base;
+    using _Option_map_base<int, bool>::_Option_map_base;
 
     template <class Protocol>
     int level(const Protocol& p) const noexcept

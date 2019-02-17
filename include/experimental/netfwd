@@ -1,6 +1,9 @@
 #ifndef NET_NETFWD
 #define NET_NETFWD
 
+#define __cpp_lib_experimental_net 201803
+#define __cpp_lib_experimental_net_extensible 201803
+
 #define NOMINMAX
 
 #include <chrono>
