@@ -93,50 +93,6 @@ public:
     const_buffer(const mutable_buffer& b) noexcept : _Buffer_base<const void>(b.data(), b.size()) {}
 };
 
-template <class T, class = void, class = void>
-struct is_mutable_buffer_sequence : false_type
-{
-};
-template <class T>
-struct is_mutable_buffer_sequence<T, void_t<decltype(buffer_sequence_begin(declval<T>()))>, void_t<decltype(buffer_sequence_end(declval<T>()))>> : true_type
-{
-};
-
-template <class T, class = void, class = void>
-struct is_const_buffer_sequence : false_type
-{
-};
-template <class T>
-struct is_const_buffer_sequence<T, void_t<decltype(buffer_sequence_begin(declval<T>()))>, void_t<decltype(buffer_sequence_end(declval<T>()))>> : true_type
-{
-};
-
-template <class T, class = void, class = void, class = void, class = void, class = void, class = void, class = void, class = void, class = void>
-struct is_dynamic_buffer : false_type
-{
-};
-template <class T>
-struct is_dynamic_buffer<
-    T,
-    void_t<typename T::const_buffers_type>,
-    void_t<typename T::mutable_buffers_type>,
-    void_t<decltype(declval<T>().size())>,
-    void_t<decltype(declval<T>().max_size())>,
-    void_t<decltype(declval<T>().capacity())>,
-    void_t<decltype(declval<T>().data())>,
-    void_t<decltype(declval<T>().prepare(0))>,
-    void_t<decltype(declval<T>().commit(0))>,
-    void_t<decltype(declval<T>().consume(0))>> : true_type
-{
-};
-
-template <class T>
-constexpr bool is_mutable_buffer_sequence_v{ is_mutable_buffer_sequence<T>::value };
-template <class T>
-constexpr bool is_const_buffer_sequence_v{ is_const_buffer_sequence<T>::value };
-template <class T>
-constexpr bool is_dynamic_buffer_v{ is_dynamic_buffer<T>::value };
-
 inline const mutable_buffer* buffer_sequence_begin(const mutable_buffer& b) noexcept { return addressof(b); }
 inline const const_buffer* buffer_sequence_begin(const const_buffer& b) noexcept { return addressof(b); }
 inline const mutable_buffer* buffer_sequence_end(const mutable_buffer& b) noexcept { return addressof(b) + 1; }
@@ -161,6 +117,55 @@ inline decltype(auto) buffer_sequence_end(const C& c) noexcept
 {
     return c.end();
 }
+
+template <class T, class Buffer, class Begin = decltype(buffer_sequence_begin(T{})), class End = decltype(buffer_sequence_end(T{}))>
+constexpr bool _Is_buffer_sequence_v{ conjunction_v<is_same<Begin, End>, is_convertible<typename iterator_traits<Begin>::value_type, Buffer>> };
+
+template <class T, class = void>
+struct is_mutable_buffer_sequence : false_type
+{
+};
+template <class T>
+struct is_mutable_buffer_sequence<T, enable_if_t<_Is_buffer_sequence_v<T, mutable_buffer>>> : true_type
+{
+};
+
+template <class T, class = void>
+struct is_const_buffer_sequence : false_type
+{
+};
+template <class T>
+struct is_const_buffer_sequence<T, enable_if_t<_Is_buffer_sequence_v<T, const_buffer>>> : true_type
+{
+};
+
+template <class T, class = void>
+struct is_dynamic_buffer : false_type
+{
+};
+template <class T>
+struct is_dynamic_buffer<
+    T,
+    enable_if_t<conjunction_v<
+        is_move_constructible<T>,
+        is_const_buffer_sequence<typename T::const_buffers_type>,
+        is_mutable_buffer_sequence<typename T::mutable_buffers_type>,
+        is_same<decltype(declval<T>().size()), size_t>,
+        is_same<decltype(declval<T>().max_size()), size_t>,
+        is_same<decltype(declval<T>().capacity()), size_t>,
+        is_same<decltype(declval<T>().data()), typename T::const_buffers_type>,
+        is_same<decltype(declval<T>().prepare(size_t(0))), typename T::mutable_buffers_type>,
+        is_void<decltype(declval<T>().commit(size_t(0)))>,
+        is_void<decltype(declval<T>().consume(size_t(0)))>>>> : true_type
+{
+};
+
+template <class T>
+constexpr bool is_mutable_buffer_sequence_v{ is_mutable_buffer_sequence<T>::value };
+template <class T>
+constexpr bool is_const_buffer_sequence_v{ is_const_buffer_sequence<T>::value };
+template <class T>
+constexpr bool is_dynamic_buffer_v{ is_dynamic_buffer<T>::value };
 
 template <class ConstBufferSequence>
 inline size_t buffer_size(const ConstBufferSequence& buffers) noexcept
