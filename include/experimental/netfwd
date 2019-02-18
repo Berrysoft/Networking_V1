@@ -4,8 +4,14 @@
 #define __cpp_lib_experimental_net 201803
 #define __cpp_lib_experimental_net_extensible 201803
 
+#ifdef NETWORKINGV1_EXPORTS
+#define NET_API __declspec(dllexport)
+#else
+#define NET_API __declspec(dllimport)
+#endif
+
 #define NOMINMAX
-#define _WINSOCK_DEPRECATED_NO_WARNINGS
+#define WIN32_LEAN_AND_MEAN
 
 #include <chrono>
 #include <system_error>

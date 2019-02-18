@@ -19,7 +19,10 @@ address_v6 make_address_v6(const char* str, error_code& ec) noexcept
 {
     sockaddr_in6 s{};
     int size = sizeof(sockaddr_in6);
-    int r{ ::WSAStringToAddressA(const_cast<char*>(str), 6, nullptr, (LPSOCKADDR)&s, &size) };
+    size_t len = strlen(str);
+    wstring widestr(len, L'\0');
+    ::MultiByteToWideChar(CP_ACP, 0, str, -1, widestr.data(), (int)(len + 1));
+    int r{ ::WSAStringToAddressW(const_cast<wchar_t*>(widestr.data()), 6, nullptr, (LPSOCKADDR)&s, &size) };
     if (r != 0)
         ec = make_error_code(errc::invalid_argument);
     return address_v6{ s.sin6_addr, s.sin6_scope_id };
