@@ -31,7 +31,7 @@ struct wait_traits
     }
 };
 
-template <class Clock, class WaitTraits = wait_traits<Clock>>
+template <class Clock, class WaitTraits>
 class basic_waitable_timer
 {
 public:

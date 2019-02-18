@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstring>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -96,10 +97,8 @@ template <class T, class = void, class = void>
 struct is_mutable_buffer_sequence : false_type
 {
 };
-template <class T,
-          class = void_t<decltype(buffer_sequence_begin(declval<T>()))>,
-          class = void_t<decltype(buffer_sequence_end(declval<T>()))>>
-struct is_mutable_buffer_sequence : true_type
+template <class T>
+struct is_mutable_buffer_sequence<T, void_t<decltype(buffer_sequence_begin(declval<T>()))>, void_t<decltype(buffer_sequence_end(declval<T>()))>> : true_type
 {
 };
 
@@ -107,10 +106,8 @@ template <class T, class = void, class = void>
 struct is_const_buffer_sequence : false_type
 {
 };
-template <class T,
-          class = void_t<decltype(buffer_sequence_begin(declval<T>()))>,
-          class = void_t<decltype(buffer_sequence_end(declval<T>()))>>
-struct is_const_buffer_sequence : true_type
+template <class T>
+struct is_const_buffer_sequence<T, void_t<decltype(buffer_sequence_begin(declval<T>()))>, void_t<decltype(buffer_sequence_end(declval<T>()))>> : true_type
 {
 };
 
@@ -118,17 +115,18 @@ template <class T, class = void, class = void, class = void, class = void, class
 struct is_dynamic_buffer : false_type
 {
 };
-template <class T,
-          class = void_t<typename T::const_buffers_type>,
-          class = void_t<typename T::mutable_buffers_type>,
-          class = void_t<decltype(declval<T>().size())>,
-          class = void_t<decltype(declval<T>().max_size())>,
-          class = void_t<decltype(declval<T>().capacity())>,
-          class = void_t<decltype(declval<T>().data())>,
-          class = void_t<decltype(declval<T>().prepare(0))>,
-          class = void_t<decltype(declval<T>().commit(0))>,
-          class = void_t<decltype(declval<T>().consume(0))>>
-struct is_dynamic_buffer : true_type
+template <class T>
+struct is_dynamic_buffer<
+    T,
+    void_t<typename T::const_buffers_type>,
+    void_t<typename T::mutable_buffers_type>,
+    void_t<decltype(declval<T>().size())>,
+    void_t<decltype(declval<T>().max_size())>,
+    void_t<decltype(declval<T>().capacity())>,
+    void_t<decltype(declval<T>().data())>,
+    void_t<decltype(declval<T>().prepare(0))>,
+    void_t<decltype(declval<T>().commit(0))>,
+    void_t<decltype(declval<T>().consume(0))>> : true_type
 {
 };
 
@@ -190,7 +188,7 @@ inline size_t buffer_copy(const MutableBufferSequence& dest, const ConstBufferSe
     while (begin1 != end1 && begin2 != end2 && max_size)
     {
         size_t n{ min({ d.size(), s.size(), max_size }) };
-        copy(s.data(), s.data() + n, d.data());
+        memcpy(d.data(), s.data(), n);
         if ((!((s += n).size())) && ++begin2)
         {
             s = *begin2;
@@ -396,7 +394,7 @@ inline dynamic_string_buffer<CharT, Traits, Allocator> dynamic_buffer(basic_stri
     return dynamic_string_buffer<CharT, Traits, Allocator>{ str, n };
 }
 
-inline constexpr size_t _Default_max_transfer_size{ 65536 };
+constexpr size_t _Default_max_transfer_size{ 65536 };
 
 class transfer_all
 {
@@ -427,12 +425,12 @@ private:
 template <class Buffers>
 struct _Prepared_buffers_max
 {
-    constexpr size_t value{ 64 };
+    static constexpr size_t value{ 64 };
 };
 template <class Elem, size_t N>
 struct _Prepared_buffers_max<array<Elem, N>>
 {
-    constexpr size_t value{ N };
+    static constexpr size_t value{ N };
 };
 
 template <class Buffers>
@@ -444,7 +442,7 @@ struct _Prepared_buffers
     using value_type = Buffer;
     using const_iterator = const Buffer*;
 
-    constexpr size_t max_buffers{ MaxBuffers < 16 ? MaxBuffers : 16 };
+    static constexpr size_t max_buffers{ MaxBuffers < 16 ? MaxBuffers : 16 };
 
     _Prepared_buffers() : count(0) {}
     const_iterator begin() const { return elems; }
@@ -566,7 +564,7 @@ inline size_t read(SyncReadStream& stream, DynamicBuffer&& b, CompletionConditio
     size_t bytes_available{ min(max(512, buffer.capacity() - buffer.size()), min(max_size, buffer.max_size() - buffer.size())) };
     while (bytes_available > 0)
     {
-        size_t bytes_transferred{ s.read_some(buffer.prepare(bytes_available), ec) };
+        size_t bytes_transferred{ stream.read_some(buffer.prepare(bytes_available), ec) };
         buffer.commit(bytes_transferred);
         total_transferred += bytes_transferred;
         max_size = completion_condition(ec, total_transferred);
@@ -702,7 +700,7 @@ struct _Buffers_iterator_types_helper<true>
 template <class BufferSequence, class ByteType>
 struct _Buffers_iterator_types
 {
-    constexpr bool is_mutable{ is_convertible_v<typename BufferSequence::value_type, mutable_buffer> };
+    static constexpr bool is_mutable{ is_convertible_v<typename BufferSequence::value_type, mutable_buffer> };
     using helper = _Buffers_iterator_types_helper<is_mutable>;
     using buffer_type = typename helper::buffer_type;
     using byte_type = typename helper::byte_type;

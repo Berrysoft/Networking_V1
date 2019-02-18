@@ -1,7 +1,5 @@
 #include <experimental/io_context>
 
-#include <WinSock2.h>
-
 namespace std::experimental::net
 {
 inline namespace v1

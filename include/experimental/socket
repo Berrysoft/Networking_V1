@@ -1,10 +1,11 @@
 #ifndef NET_SOCKET
 #define NET_SOCKET
 
+#include <experimental/buffer>
 #include <experimental/timer>
 
-#include <MSWSock.h>
 #include <WinSock2.h>
+#include <Ws2tcpip.h>
 #include <istream>
 #include <streambuf>
 #include <system_error>
@@ -338,6 +339,9 @@ template <class Protocol>
 class _Basic_socket : public socket_base
 {
 public:
+    using socket_base::message_flags;
+    using socket_base::shutdown_type;
+    using socket_base::wait_type;
     using executor_type = io_context::executor_type;
     using native_handle_type = SOCKET;
     using protocol_type = Protocol;
@@ -346,7 +350,7 @@ public:
     executor_type get_executor() noexcept { return ctx_->get_executor(); }
     io_context& _Context() { return *ctx_; }
     native_handle_type native_handle() { return socket_; }
-    protocol_type _Protocol() { return protocol_; }
+    constexpr protocol_type _Protocol() { return protocol_; }
 
     void open(const protocol_type& protocol, error_code& ec)
     {
@@ -593,29 +597,37 @@ template <class Protocol>
 class basic_socket : public _Basic_socket<Protocol>
 {
 public:
+    using _Basic_socket<Protocol>::message_flags;
+    using _Basic_socket<Protocol>::shutdown_type;
+    using _Basic_socket<Protocol>::wait_type;
+    using _Basic_socket<Protocol>::executor_type;
+    using _Basic_socket<Protocol>::native_handle_type;
+    using _Basic_socket<Protocol>::protocol_type;
+    using _Basic_socket<Protocol>::endpoint_type;
+
     bool at_mark(error_code& ec) const
     {
         unsigned long value;
-        int r{ ::ioctlsocket(native_handle(), SIOCATMARK, &value) };
+        int r{ ::ioctlsocket(this->native_handle(), SIOCATMARK, &value) };
         if (r != 0)
             ec = error_code{ ::WSAGetLastError(), generic_category() };
         return value != 0;
     }
-    bool at_mark() const { return _CHECK_ERROR_CODE_INVOKE_FUNC(at_mark(ec)); }
+    bool at_mark() const { _CHECK_ERROR_CODE_INVOKE_FUNC(at_mark(ec)); }
 
     size_t available(error_code& ec) const
     {
         unsigned long value;
-        int r{ ::ioctlsocket(native_handle(), FIONREAD, &value) };
+        int r{ ::ioctlsocket(this->native_handle(), FIONREAD, &value) };
         if (r != 0)
             ec = error_code{ ::WSAGetLastError(), generic_category() };
         return static_cast<size_t>(value);
     }
-    size_t available() const { _CHECK_ERROR_CODE_INVOKE_FUNC(avaliable(ec)); }
+    size_t available() const { _CHECK_ERROR_CODE_INVOKE_FUNC(available(ec)); }
 
     void shutdown(shutdown_type what, error_code& ec)
     {
-        int r{ ::shutdown(native_handle(), static_cast<int>(what)) };
+        int r{ ::shutdown(this->native_handle(), static_cast<int>(what)) };
         if (r != 0)
             ec = error_code{ ::WSAGetLastError(), generic_category() };
     }
@@ -625,7 +637,7 @@ public:
     {
         endpoint_type endpoint{};
         int endpoint_len{ endpoint.capacity() };
-        int r{ ::getpeername(native_handle(), endpoint.data(), &endpoint_len) };
+        int r{ ::getpeername(this->native_handle(), endpoint.data(), &endpoint_len) };
         if (r == 0)
             endpoint.resize(endpoint_len);
         else
@@ -639,13 +651,13 @@ public:
 
     void connect(const endpoint_type& endpoint, error_code& ec)
     {
-        if (!is_open())
+        if (!this->is_open())
         {
             open(endpoint.protocol(), ec);
             if (ec)
                 return;
         }
-        int r{ ::connect(native_handle(), endpoint.data(), endpoint.size()) };
+        int r{ ::connect(this->native_handle(), endpoint.data(), endpoint.size()) };
         if (r != 0)
             ec = error_code{ ::WSAGetLastError(), generic_category() };
     }
@@ -658,7 +670,7 @@ public:
         _Io_operation* op{ new _Io_operation{} };
         op->overlapped.hEvent = ::WSACreateEvent();
         op->operation = [token = forward<CompletionToken>(token), &endpoint](_Io_operation*, DWORD) { token(error_code{}, endpoint); };
-        BOOL r{ ::LPFN_CONNECTEX(native_handle(), endpoint.data(), endpoint.size(), nullptr, 0, nullptr, op) };
+        BOOL r{ ::LPFN_CONNECTEX(this->native_handle(), endpoint.data(), endpoint.size(), nullptr, 0, nullptr, op) };
         if (!r)
         {
             int err{ ::WSAGetLastError() };
@@ -680,7 +692,7 @@ protected:
 };
 
 template <class Buffer, class BufferSequence>
-tuple<vector<::WSABUF>, size_t> _Native_buffers(const BufferSequence& buffers)
+inline tuple<vector<::WSABUF>, size_t> _Native_buffers(const BufferSequence& buffers)
 {
     vector<::WSABUF> buf{};
     auto i{ buffer_sequence_begin(buffers) };
@@ -699,9 +711,13 @@ template <class Protocol>
 class _Basic_datagram_socket : public basic_socket<Protocol>
 {
 public:
-    using native_handle_type = SOCKET;
-    using protocol_type = Protocol;
-    using endpoint_type = typename protocol_type::endpoint;
+    using basic_socket<Protocol>::message_flags;
+    using basic_socket<Protocol>::shutdown_type;
+    using basic_socket<Protocol>::wait_type;
+    using basic_socket<Protocol>::executor_type;
+    using basic_socket<Protocol>::native_handle_type;
+    using basic_socket<Protocol>::protocol_type;
+    using basic_socket<Protocol>::endpoint_type;
 
     explicit _Basic_datagram_socket(io_context& ctx) : basic_socket<Protocol>(ctx) {}
     _Basic_datagram_socket(io_context& ctx, const protocol_type& protocol) : basic_socket<Protocol>(ctx, protocol) {}
@@ -714,7 +730,7 @@ public:
     {
     }
 
-    ~_Basic_datagram_socket() override {}
+    virtual ~_Basic_datagram_socket() override {}
 
     _Basic_datagram_socket& operator=(const _Basic_datagram_socket&) = delete;
     _Basic_datagram_socket& operator=(_Basic_datagram_socket&& rhs)
@@ -734,7 +750,7 @@ public:
     {
         auto [buf, n]{ _Native_buffers<mutable_buffer>(buffers) };
         DWORD rec{ 0 };
-        int r{ ::WSARecv(native_handle(), buf.data(), n, &rec, &flags, nullptr, nullptr) };
+        int r{ ::WSARecv(this->native_handle(), buf.data(), n, &rec, &flags, nullptr, nullptr) };
         if (r != 0)
             ec = error_code{ ::WSAGetLastError(), generic_category() };
         return rec;
@@ -759,7 +775,7 @@ public:
     auto async_receive(const MutableBufferSequence& buffers, message_flags flags, CompletionToken&& token)
     {
         async_completion<CompletionToken, void(error_code, size_t)> init{ token };
-        if (flags & socket_base::message_peek)
+        if ((int)flags & (int)socket_base::message_peek)
         {
             token(make_error_code(errc::invalid_argument), 0);
         }
@@ -770,7 +786,7 @@ public:
             op->overlapped.hEvent = ::WSACreateEvent();
             op->operation = [token = forward<CompletionToken>(token)](_Io_operation*, DWORD n) { token(error_code{}, n); };
             DWORD rec{ 0 };
-            int r{ ::WSARecv(native_handle(), data.data(), n, &rec, &flags, op, nullptr) };
+            int r{ ::WSARecv(this->native_handle(), data.data(), n, &rec, &flags, op, nullptr) };
             if (r != 0)
             {
                 int err = ::WSAGetLastError();
@@ -793,7 +809,7 @@ public:
     {
         auto [buf, n]{ _Native_buffers<const_buffer>(buffers) };
         DWORD s{ 0 };
-        int r{ ::WSASend(native_handle(), buf.data(), n, &s, flags, nullptr, nullptr) };
+        int r{ ::WSASend(this->native_handle(), buf.data(), n, &s, flags, nullptr, nullptr) };
         if (r != 0)
             ec = error_code{ ::WSAGetLastError(), generic_category() };
         return s;
@@ -823,7 +839,7 @@ public:
         op->overlapped.hEvent = ::WSACreateEvent();
         op->operation = [token = forward<CompletionToken>(token)](_Io_operation*, DWORD n) { token(error_code{}, n); };
         DWORD s{ 0 };
-        int r{ ::WSASend(native_handle(), data.data(), n, &s, flags, op, nullptr) };
+        int r{ ::WSASend(this->native_handle(), data.data(), n, &s, flags, op, nullptr) };
         if (r != 0)
         {
             int err = ::WSAGetLastError();
@@ -845,6 +861,14 @@ template <class Protocol>
 class basic_datagram_socket : public _Basic_datagram_socket<Protocol>
 {
 public:
+    using _Basic_datagram_socket<Protocol>::message_flags;
+    using _Basic_datagram_socket<Protocol>::shutdown_type;
+    using _Basic_datagram_socket<Protocol>::wait_type;
+    using _Basic_datagram_socket<Protocol>::executor_type;
+    using _Basic_datagram_socket<Protocol>::native_handle_type;
+    using _Basic_datagram_socket<Protocol>::protocol_type;
+    using _Basic_datagram_socket<Protocol>::endpoint_type;
+
     using _Basic_datagram_socket<Protocol>::_Basic_datagram_socket;
 
     template <class MutableBufferSequence>
@@ -852,7 +876,7 @@ public:
     {
         auto [buf, n]{ _Native_buffers<mutable_buffer>(buffers) };
         DWORD rec{ 0 };
-        int r{ ::WSARecvFrom(native_handle(), buf.data(), n, &rec, flags, sender.data(), sender.size(), nullptr, nullptr) };
+        int r{ ::WSARecvFrom(this->native_handle(), buf.data(), n, &rec, flags, sender.data(), sender.size(), nullptr, nullptr) };
         if (r != 0)
             ec = error_code{ ::WSAGetLastError(), generic_category() };
         return rec;
@@ -877,18 +901,18 @@ public:
     auto async_receive_from(const MutableBufferSequence& buffers, endpoint_type& sender, message_flags flags, CompletionToken&& token)
     {
         async_completion<CompletionToken, void(error_code, size_t)> init{ token };
-        if (flags & socket_base::message_peek)
+        if ((int)flags & (int)socket_base::message_peek)
         {
             token(make_error_code(errc::invalid_argument), 0);
         }
         else
         {
-            auto [data, n]{ _Native_buffers<mutable_buffer>(buffers) };
+            auto [buf, n]{ _Native_buffers<mutable_buffer>(buffers) };
             _Io_operation* op{ new _Io_operation{} };
             op->overlapped.hEvent = ::WSACreateEvent();
             op->operation = [token = forward<CompletionToken>(token)](_Io_operation*, DWORD n) { token(error_code{}, n); };
             DWORD rec{ 0 };
-            int r{ ::WSARecvFrom(native_handle(), buf.data(), n, &rec, flags, sender.data(), sender.size(), op, nullptr) };
+            int r{ ::WSARecvFrom(this->native_handle(), buf.data(), n, &rec, flags, sender.data(), sender.size(), op, nullptr) };
             if (r != 0)
             {
                 int err = ::WSAGetLastError();
@@ -911,7 +935,7 @@ public:
     {
         auto [buf, n]{ _Native_buffers<const_buffer>(buffers) };
         DWORD s{ 0 };
-        int r{ ::WSASendTo(native_handle(), buf.data(), n, &s, flags, recipient.data(), recipient.size(), nullptr, nullptr) };
+        int r{ ::WSASendTo(this->native_handle(), buf.data(), n, &s, flags, recipient.data(), recipient.size(), nullptr, nullptr) };
         if (r != 0)
             ec = error_code{ ::WSAGetLastError(), generic_category() };
         return s;
@@ -936,12 +960,12 @@ public:
     auto async_send_to(const ConstBufferSequence& buffers, const endpoint_type& recipient, message_flags flags, CompletionToken&& token)
     {
         async_completion<CompletionToken, void(error_code, size_t)> init{ token };
-        auto [data, n]{ _Native_buffers<const_buffer>(buffers) };
+        auto [buf, n]{ _Native_buffers<const_buffer>(buffers) };
         _Io_operation* op{ new _Io_operation{} };
         op->overlapped.hEvent = ::WSACreateEvent();
         op->operation = [token = forward<CompletionToken>(token)](_Io_operation*, DWORD n) { token(error_code{}, n); };
         DWORD s{ 0 };
-        int r{ ::WSASendTo(native_handle(), buf.data(), n, &s, flags, recipient.data(), recipient.size(), op, nullptr) };
+        int r{ ::WSASendTo(this->native_handle(), buf.data(), n, &s, flags, recipient.data(), recipient.size(), op, nullptr) };
         if (r != 0)
         {
             int err = ::WSAGetLastError();
@@ -963,6 +987,14 @@ template <class Protocol>
 class basic_stream_socket : public _Basic_datagram_socket<Protocol>
 {
 public:
+    using _Basic_datagram_socket<Protocol>::message_flags;
+    using _Basic_datagram_socket<Protocol>::shutdown_type;
+    using _Basic_datagram_socket<Protocol>::wait_type;
+    using _Basic_datagram_socket<Protocol>::executor_type;
+    using _Basic_datagram_socket<Protocol>::native_handle_type;
+    using _Basic_datagram_socket<Protocol>::protocol_type;
+    using _Basic_datagram_socket<Protocol>::endpoint_type;
+
     using _Basic_datagram_socket<Protocol>::_Basic_datagram_socket;
 
     template <class MutableBufferSequence>
@@ -973,7 +1005,7 @@ public:
     template <class MutableBufferSequence>
     size_t read_some(const MutableBufferSequence& buffers)
     {
-        return _CHECK_ERROR_CODE_INVOKE_FUNC(read_some(buffers, ec));
+        _CHECK_ERROR_CODE_INVOKE_FUNC(read_some(buffers, ec));
     }
 
     template <class MutableBufferSequence, class CompletionToken>
@@ -990,7 +1022,7 @@ public:
     template <class ConstBufferSequence>
     size_t write_some(const ConstBufferSequence& buffers)
     {
-        return _CHECK_ERROR_CODE_INVOKE_FUNC(write_some(buffers, ec));
+        _CHECK_ERROR_CODE_INVOKE_FUNC(write_some(buffers, ec));
     }
 
     template <class ConstBufferSequence, class CompletionToken>
@@ -1004,6 +1036,14 @@ template <class AcceptableProtocol>
 class basic_socket_acceptor : public _Basic_socket<AcceptableProtocol>
 {
 public:
+    using _Basic_socket<AcceptableProtocol>::message_flags;
+    using _Basic_socket<AcceptableProtocol>::shutdown_type;
+    using _Basic_socket<AcceptableProtocol>::wait_type;
+    using _Basic_socket<AcceptableProtocol>::executor_type;
+    using _Basic_socket<AcceptableProtocol>::native_handle_type;
+    using _Basic_socket<AcceptableProtocol>::protocol_type;
+    using _Basic_socket<AcceptableProtocol>::endpoint_type;
+
     using socket_type = typename protocol_type::socket;
 
     using _Basic_socket<AcceptableProtocol>::_Basic_socket;
@@ -1011,27 +1051,27 @@ public:
     {
         open(endpoint.protocol());
         if (reuse_addr)
-            set_option(reuse_address{ int(true) });
+            this->set_option(socket_base::reuse_address{ true });
         bind(endpoint);
         listen();
     }
 
     void listen(int backlog, error_code& ec)
     {
-        int r{ ::listen(native_handle(), backlog) };
+        int r{ ::listen(this->native_handle(), backlog) };
         if (r != 0)
             ec = error_code{ ::WSAGetLastError(), generic_category() };
     }
-    void listen(int backlog = max_listen_connections) { _CHECK_ERROR_CODE_INVOKE(listen(backlog, ec)); }
+    void listen(int backlog = socket_base::max_listen_connections) { _CHECK_ERROR_CODE_INVOKE(listen(backlog, ec)); }
 
-    void enable_connection_aborted(bool mode);
-    bool enable_connection_aborted() const;
+    void enable_connection_aborted(bool mode) { enable_aborted_ = mode; }
+    bool enable_connection_aborted() const { return enable_aborted_; }
 
     socket_type accept(io_context& ctx, error_code& ec)
     {
-        native_handle_type h{ ::accept(native_handle(), nullptr, 0) };
+        native_handle_type h{ ::accept(this->native_handle(), nullptr, 0) };
         if (h != INVALID_SOCKET)
-            return socket_type{ ctx, _Protocol(), h };
+            return socket_type{ ctx, this->_Protocol(), h };
         else
         {
             ec = error_code{ ::WSAGetLastError(), generic_category() };
@@ -1039,24 +1079,24 @@ public:
         }
     }
     socket_type accept(io_context& ctx) { _CHECK_ERROR_CODE_INVOKE_FUNC(accept(ctx, ec)); }
-    socket_type accept(error_code& ec) { accept(_Context(), ec); }
+    socket_type accept(error_code& ec) { accept(this->_Context(), ec); }
     socket_type accept() { _CHECK_ERROR_CODE_INVOKE_FUNC(accept(ec)); }
 
     template <class CompletionToken>
     auto async_accept(io_context& ctx, CompletionToken&& token)
     {
         async_completion<CompletionToken, void(error_code, socket_type)> init{ token };
-        native_handle_type h{ ::socket(_Protocol().family(), _Protocol().type(), _Protocol().protocol()) };
+        native_handle_type h{ ::socket(this->_Protocol().family(), this->_Protocol().type(), this->_Protocol().protocol()) };
         if (h != INVALID_SOCKET)
         {
             ::CreateIoCompletionPort(h, ctx._Native_handle(), 0, 0);
-            constexpr DWORD size{ _Protocol().family() == AF_INET ? sizeof(::sockaddr_in) : sizeof(::sockaddr_in6) } + 16;
+            constexpr DWORD size{ (this->_Protocol().family() == AF_INET ? sizeof(::sockaddr_in) : sizeof(::sockaddr_in6)) + 16 };
             char buf[2 * size];
             DWORD rec;
             _Io_operation* op{ new _Io_operation{} };
             op->overlapped.hEvent = ::WSACreateEvent();
-            op->operation = [token = forward<CompletionToken>(token), h, &ctx, p = _Protocol()](_Io_operation*, DWORD) { token(error_code{}, socket_type{ ctx, p, h }); };
-            BOOL r{ ::AcceptEx(native_handle(), h.native_handle(), 0, size, size, &rec, op) };
+            op->operation = [token = forward<CompletionToken>(token), h, &ctx, p = this->_Protocol()](_Io_operation*, DWORD) { token(error_code{}, socket_type{ ctx, p, h }); };
+            BOOL r{ ::AcceptEx(this->native_handle(), h.native_handle(), 0, size, size, &rec, op) };
             if (!r)
             {
                 int err{ ::WSAGetLastError() };
@@ -1075,54 +1115,67 @@ public:
     template <class CompletionToken>
     auto async_accept(CompletionToken&& token)
     {
-        return accept(_Context(), forward<CompletionToken>(token));
+        return accept(this->_Context(), forward<CompletionToken>(token));
     }
 
     socket_type accept(io_context& ctx, endpoint_type& endpoint, error_code& ec)
     {
         int endpoint_len{ endpoint.capacity() };
-        native_handle_type h{ ::accept(native_handle(), endpoint.data(), &endpoint_len) };
-        if (h != INVALID_SOCKET)
+        while (true)
         {
-            endpoint.resize(endpoint_len);
-            return socket_type{ ctx, _Protocol(), h };
-        }
-        else
-        {
-            ec = error_code{ ::WSAGetLastError(), generic_category() };
-            return socket_type{ ctx };
+            native_handle_type h{ ::accept(this->native_handle(), endpoint.data(), &endpoint_len) };
+            if (h != INVALID_SOCKET)
+            {
+                endpoint.resize(endpoint_len);
+                return socket_type{ ctx, this->_Protocol(), h };
+            }
+            else
+            {
+                int err{ ::WSAGetLastError() };
+                if (!enable_aborted_ && err == WSA_OPERATION_ABORTED)
+                    continue;
+                ec = error_code{ ::WSAGetLastError(), generic_category() };
+                return socket_type{ ctx };
+            }
         }
     }
     socket_type accept(io_context& ctx, endpoint_type& endpoint) { _CHECK_ERROR_CODE_INVOKE_FUNC(accept(ctx, endpoint, ec)); }
-    socket_type accept(endpoint_type& endpoint, error_code& ec) { return accept(_Context(), endpoint, ec); }
+    socket_type accept(endpoint_type& endpoint, error_code& ec) { return accept(this->_Context(), endpoint, ec); }
     socket_type accept(endpoint_type& endpoint) { _CHECK_ERROR_CODE_INVOKE_FUNC(accept(endpoint, ec)); }
 
     template <class CompletionToken>
     auto async_accept(io_context& ctx, endpoint_type& endpoint, CompletionToken&& token)
     {
         async_completion<CompletionToken, void(error_code, socket_type)> init{ token };
-        native_handle_type h{ ::socket(_Protocol().family(), _Protocol().type(), _Protocol().protocol()) };
+        native_handle_type h{ ::socket(this->_Protocol().family(), this->_Protocol().type(), this->_Protocol().protocol()) };
         if (h != INVALID_SOCKET)
         {
-            using sockaddr_t = conditional_t<_Protocol().family() == AF_INET, ::sockaddr_in, sockaddr_in6>;
-            constexpr DWORD size{ sizeof(sockaddr_t) } + 16;
+            using sockaddr_t = conditional_t<this->_Protocol().family() == AF_INET, ::sockaddr_in, ::sockaddr_in6>;
+            constexpr DWORD size{ sizeof(sockaddr_t) + 16 };
             char buf[2 * size];
             DWORD rec;
             _Io_operation* op{ new _Io_operation{} };
             op->overlapped.hEvent = ::WSACreateEvent();
-            op->operation = [token = forward<CompletionToken>(token), h, &ctx, p = _Protocol()](_Io_operation*, DWORD) { token(error_code{}, socket_type{ ctx, p, h }); };
-            BOOL r{ ::AcceptEx(native_handle(), h.native_handle(), 0, size, size, &rec, op) };
-            if (!r)
+            op->operation = [token = forward<CompletionToken>(token), h, &ctx, p = this->_Protocol()](_Io_operation*, DWORD) { token(error_code{}, socket_type{ ctx, p, h }); };
+            while (true)
             {
-                int err{ ::WSAGetLastError() };
-                if (err != ERROR_IO_PENDING)
+                BOOL r{ ::AcceptEx(this->native_handle(), h.native_handle(), 0, size, size, &rec, op) };
+                if (!r)
                 {
-                    token(error_code{ err, generic_category() }, socket_type{ ctx });
+                    int err{ ::WSAGetLastError() };
+                    if (!enable_aborted_ && err == WSA_OPERATION_ABORTED)
+                        continue;
+                    if (err != ERROR_IO_PENDING)
+                    {
+                        token(error_code{ err, generic_category() }, socket_type{ ctx });
+                    }
                 }
+                break;
             }
-            sockaddr_t local, remote;
-            ::GetAcceptExSockaddrs(buf, 0, size, size, &&local, sizeof(sockaddr_t), &&remote, sizeof(sockaddr_t));
-            endpoint = endpoint_type{ remote };
+            sockaddr_t *local, remote;
+            INT size2 = sizeof(sockaddr_t);
+            ::GetAcceptExSockaddrs(buf, 0, size, size, (sockaddr**)&local, &size2, (sockaddr**)&remote, &size2);
+            endpoint = endpoint_type{ *remote };
         }
         else
         {
@@ -1133,11 +1186,14 @@ public:
     template <class CompletionToken>
     auto async_accept(endpoint_type& endpoint, CompletionToken&& token)
     {
-        return async_accept(_Context(), endpoint, forward<CompletionToken>(token));
+        return async_accept(this->_Context(), endpoint, forward<CompletionToken>(token));
     }
+
+private:
+    bool enable_aborted_{ false };
 };
 
-template <class Protocol, class Clock = chrono::steady_clock, class WaitTraits = wait_traits<Clock>>
+template <class Protocol, class Clock, class WaitTraits>
 class basic_socket_streambuf : public basic_streambuf<char>
 {
 public:
@@ -1185,12 +1241,12 @@ public:
         if (!ec_) return nullptr;
         int r{ ::connect(socket_.native_handle(), e.data(), e.size()) };
         if (r != 0)
-            ec = error_code{ ::WSAGetLastError(), generic_category() };
+            ec_ = error_code{ ::WSAGetLastError(), generic_category() };
         if (!ec_) return nullptr;
         return this;
     }
     template <class... Args>
-    basic_socket_streambuf* connect(Args&&...)
+    basic_socket_streambuf* connect(Args&&... args)
     {
         endpoint_type e{ protocol_type::resolver(_Context()).resolve(forward<Args>(args)...) };
         return connect(e);
@@ -1208,7 +1264,7 @@ public:
     error_code error() const { return ec_; }
 
     time_point expiry() const { return expiry_; }
-    void expires_at(const time_point& t) { ecpiry_ = t; }
+    void expires_at(const time_point& t) { expiry_ = t; }
     void expires_after(const duration& d) { expires_at(clock_type::now() + d); }
 
 protected:
@@ -1243,10 +1299,10 @@ protected:
                 ec_ = make_error_code(stream_errc::eof);
                 return traits_type::eof();
             }
-            if (!ec)
+            if (!ec_)
                 return traits_type::eof();
             pollfd fds;
-            fds.fd = s;
+            fds.fd = socket_.native_handle();
             fds.events = POLLIN;
             fds.revents = 0;
             r = ::WSAPoll(&fds, 1, chrono::duration_cast<chrono::milliseconds>(wait_traits<clock_type>::to_wait_duration(expiry_)).count());
@@ -1294,10 +1350,10 @@ protected:
                 output_buffer += static_cast<size_t>(bytes);
                 continue;
             }
-            if (!ec)
+            if (!ec_)
                 return traits_type::eof();
             pollfd fds;
-            fds.fd = s;
+            fds.fd = socket_.native_handle();
             fds.events = POLLOUT;
             fds.revents = 0;
             r = ::WSAPoll(&fds, 1, chrono::duration_cast<chrono::milliseconds>(wait_traits<clock_type>::to_wait_duration(expiry_)).count());
@@ -1334,7 +1390,7 @@ private:
         return ctx;
     }
 
-    inline constexpr size_t _Putback_max{ 8 };
+    inline static constexpr size_t _Putback_max{ 8 };
     void _Init_buffers()
     {
         setg(get_buffer_.data(), get_buffer_.data() + _Putback_max, get_buffer_.data() + _Putback_max);
@@ -1351,7 +1407,7 @@ private:
     time_point expiry_{ time_point::max() };
 };
 
-template <class Protocol, class Clock = chrono::steady_clock, class WaitTraits = wait_traits<Clock>>
+template <class Protocol, class Clock, class WaitTraits>
 class basic_socket_iostream : public basic_iostream<char>
 {
 public:

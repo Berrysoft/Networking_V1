@@ -4,8 +4,6 @@
 #include <experimental/io_context>
 #include <experimental/socket>
 
-#include <WinSock2.h>
-#include <Ws2tcpip.h>
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -60,6 +58,31 @@ inline const error_category& resolver_category() noexcept
 inline error_code make_error_code(resolver_errc e) noexcept { return error_code{ static_cast<int>(e), resolver_category() }; }
 inline error_condition make_error_condition(resolver_errc e) noexcept { return error_condition{ static_cast<int>(e), resolver_category() }; }
 
+// Use a compiler bug to make it happy.
+template <class It1, class It2>
+constexpr void* _Memcpy(It1 dest, It2 src, size_t size)
+{
+    return memcpy(dest, src, size);
+}
+
+template <class It1, class It2>
+constexpr int _Memcmp(It1 buf1, It2 buf2, size_t size)
+{
+    return memcmp(buf1, buf2, size);
+}
+
+template <class Int>
+constexpr Int _Htonl(Int i)
+{
+    return ::htonl(i);
+}
+
+template <class Int>
+constexpr Int _Ntohl(Int i)
+{
+    return ::ntohl(i);
+}
+
 using port_type = uint_least16_t;
 using scope_id_type = uint_least32_t;
 
@@ -87,8 +110,8 @@ public:
 
     constexpr address_v4() noexcept : addr_() { addr_.s_addr = 0; }
     constexpr address_v4(const address_v4& a) noexcept : addr_(a.addr_) {}
-    constexpr address_v4(const bytes_type& bytes) : addr_() { memcpy(&addr_.s_addr, bytes.data(), 4); }
-    explicit constexpr address_v4(uint_type val) : addr_() { addr_.s_addr = ::htonl(val); }
+    constexpr address_v4(const bytes_type& bytes) : addr_() { _Memcpy(&addr_.s_addr, bytes.data(), 4); }
+    explicit constexpr address_v4(uint_type val) : addr_() { addr_.s_addr = _Htonl(val); }
     constexpr address_v4(::in_addr val) : addr_(val) {}
 
     address_v4& operator=(const address_v4& a) noexcept
@@ -100,10 +123,10 @@ public:
     constexpr bytes_type to_bytes() const noexcept
     {
         bytes_type bytes{};
-        memcpy(bytes.data(), &addr_.s_addr, 4);
+        _Memcpy(bytes.data(), &addr_.s_addr, 4);
         return bytes;
     }
-    constexpr uint_type to_uint() const noexcept { return ::ntohl(addr_.s_addr); }
+    constexpr uint_type to_uint() const noexcept { return _Ntohl(addr_.s_addr); }
     constexpr ::in_addr& _Addr() noexcept { return addr_; }
     constexpr const ::in_addr& _Addr() const noexcept { return addr_; }
 
@@ -144,14 +167,6 @@ inline basic_ostream<CharT, Traits>& operator<<(basic_ostream<CharT, Traits>& s,
 
 constexpr address_v4 make_address_v4(const address_v4::bytes_type& bytes) { return address_v4{ bytes }; }
 constexpr address_v4 make_address_v4(address_v4::uint_type val) { return address_v4{ val }; }
-constexpr address_v4 make_address_v4(v4_mapped_t, const address_v6& a)
-{
-    if (!a.is_v4_mapped())
-        throw bad_address_cast{};
-    address_v6::bytes_type v6b{ a.to_bytes() };
-    address_v4::bytes_type v4b{ v6b[12], v6b[13], v6b[14], v6b[15] };
-    return address_v4{ v4b };
-}
 address_v4 make_address_v4(const char*, error_code&) noexcept;
 inline address_v4 make_address_v4(const char* str) { _CHECK_ERROR_CODE_INVOKE_FUNC(make_address_v4(str, ec)); }
 inline address_v4 make_address_v4(const string& str, error_code& ec) noexcept { return make_address_v4(str.c_str(), ec); }
@@ -171,7 +186,7 @@ public:
     };
     constexpr address_v6() noexcept : addr_(), scope_id_(0) {}
     constexpr address_v6(const address_v6& a) noexcept : addr_(a.addr_), scope_id_(a.scope_id_) {}
-    constexpr address_v6(const bytes_type& bytes, scope_id_type scope = 0) : addr_(), scope_id_(scope) { memcpy(addr_.s6_addr, bytes.data(), 16); }
+    constexpr address_v6(const bytes_type& bytes, scope_id_type scope = 0) : addr_(), scope_id_(scope) { _Memcpy(addr_.s6_addr, bytes.data(), 16); }
     constexpr address_v6(::in6_addr addr, scope_id_type scope) : addr_(addr), scope_id_(scope) {}
 
     address_v6& operator=(const address_v6& a) noexcept
@@ -184,7 +199,7 @@ public:
     constexpr bytes_type to_bytes() const noexcept
     {
         bytes_type bytes;
-        memcpy(bytes.data(), addr_.s6_addr, 16);
+        _Memcpy(bytes.data(), addr_.s6_addr, 16);
         return bytes;
     }
     constexpr ::in6_addr& _Addr() noexcept { return addr_; }
@@ -274,12 +289,12 @@ public:
 
     friend constexpr bool operator==(const address_v6& a, const address_v6& b) noexcept
     {
-        return memcmp(&a.addr_, &b.addr_, sizeof(::in6_addr)) == 0 && a.scope_id_ == b.scope_id_;
+        return _Memcmp(&a.addr_, &b.addr_, sizeof(::in6_addr)) == 0 && a.scope_id_ == b.scope_id_;
     }
     friend constexpr bool operator!=(const address_v6& a, const address_v6& b) noexcept { return !(a == b); }
     friend constexpr bool operator<(const address_v6& a, const address_v6& b) noexcept
     {
-        int memcmp_result = memcmp(&a.addr_, &b.addr_, sizeof(::in6_addr));
+        int memcmp_result = _Memcmp(&a.addr_, &b.addr_, sizeof(::in6_addr));
         if (memcmp_result < 0)
             return true;
         if (memcmp_result > 0)
@@ -299,6 +314,15 @@ template <class CharT, class Traits>
 inline basic_ostream<CharT, Traits>& operator<<(basic_ostream<CharT, Traits>& s, const address_v6& a)
 {
     return s << a.to_string().c_str();
+}
+
+constexpr address_v4 make_address_v4(v4_mapped_t, const address_v6& a)
+{
+    if (!a.is_v4_mapped())
+        throw bad_address_cast{};
+    address_v6::bytes_type v6b{ a.to_bytes() };
+    address_v4::bytes_type v4b{ v6b[12], v6b[13], v6b[14], v6b[15] };
+    return address_v4{ v4b };
 }
 
 constexpr address_v6 make_address_v6(const address_v6::bytes_type& bytes, scope_id_type scope = 0) { return address_v6{ bytes, scope }; }
@@ -785,12 +809,12 @@ public:
         else
         {
             address_v6 addr{};
-            memcpy(addr._Addr().s6_addr, data_.v6.sin6_addr.s6_addr, 16);
+            _Memcpy(addr._Addr().s6_addr, data_.v6.sin6_addr.s6_addr, 16);
             addr.scope_id = data_.v6.sin6_scope_id;
             return addr;
         }
     }
-    void address(const address& addr) noexcept
+    void address(const ip::address& addr) noexcept
     {
         if (addr.is_v4())
         {
@@ -802,7 +826,7 @@ public:
             data_.v6 = {};
             data_.v6.sin6_family = protocol_type::v6().family();
             auto v6a{ addr.to_v6() };
-            memcpy(data_.v6.sin6_addr.s6_addr, v6a._Addr().s6_addr, 16);
+            _Memcpy(data_.v6.sin6_addr.s6_addr, v6a._Addr().s6_addr, 16);
             data_.v6.sin6_scope_id = v6a.scope_id();
         }
     }
@@ -1063,7 +1087,7 @@ public:
         ::addrinfoexA* result{ nullptr };
         _Io_operation* op{ new _Io_operation{} };
         op->overlapped.hEvent = ::WSACreateEvent();
-        op->operation = [token = forward<CompletionToken>(token), &result](_Io_operation*, DWORD) {
+        op->operation = [token = forward<CompletionToken>(token), &result, service_name](_Io_operation*, DWORD) {
             results_type results{};
             for (::addrinfoexA* ptr{ result }; ptr; ptr = ptr->ai_next)
             {
@@ -1081,7 +1105,7 @@ public:
             int err{ ::WSAGetLastError() };
             if (err != WSA_IO_PENDING)
             {
-                token(make_error_code(static_cast<resolver_errc>(err));, {});
+                token(make_error_code(static_cast<resolver_errc>(err)), {});
             }
         }
         return init.result.get();
@@ -1143,7 +1167,7 @@ public:
         ::addrinfoexA* result{ nullptr };
         _Io_operation* op{ new _Io_operation{} };
         op->overlapped.hEvent = ::WSACreateEvent();
-        op->operation = [token = forward<CompletionToken>(token), &result](_Io_operation*, DWORD) {
+        op->operation = [token = forward<CompletionToken>(token), &result, service_name](_Io_operation*, DWORD) {
             results_type results{};
             for (::addrinfoexA* ptr{ result }; ptr; ptr = ptr->ai_next)
             {
@@ -1161,7 +1185,7 @@ public:
             int err{ ::WSAGetLastError() };
             if (err != WSA_IO_PENDING)
             {
-                token(make_error_code(static_cast<resolver_errc>(err));, {});
+                token(make_error_code(static_cast<resolver_errc>(err)), {});
             }
         }
         return init.result.get();
@@ -1187,7 +1211,7 @@ public:
         }
         if (result != 0)
         {
-            ec = make_error_code(static_cast<resolver_errc>(r));
+            ec = make_error_code(static_cast<resolver_errc>(result));
             return {};
         }
         results_type results{};

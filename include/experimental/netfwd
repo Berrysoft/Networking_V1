@@ -5,6 +5,7 @@
 #define __cpp_lib_experimental_net_extensible 201803
 
 #define NOMINMAX
+#define _WINSOCK_DEPRECATED_NO_WARNINGS
 
 #include <chrono>
 #include <system_error>

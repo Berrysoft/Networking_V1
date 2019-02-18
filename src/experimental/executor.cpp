@@ -14,9 +14,9 @@ execution_context::~execution_context()
     destroy();
 }
 
-_Service_registry::_Service_registry(execution_context& owner) : owner_(owner) {}
+execution_context::_Service_registry::_Service_registry(execution_context& owner) : owner_(owner) {}
 
-void _Service_registry::shutdown_services()
+void execution_context::_Service_registry::shutdown_services()
 {
     for (auto& svc : services_)
     {
@@ -24,12 +24,12 @@ void _Service_registry::shutdown_services()
     }
 }
 
-void _Service_registry::destroy_services()
+void execution_context::_Service_registry::destroy_services()
 {
     services_.clear();
 }
 
-void _Service_registry::notify_fork(fork_event fork_ev)
+void execution_context::_Service_registry::notify_fork(fork_event fork_ev)
 {
     if (fork_ev == fork_event::prepare)
     {
@@ -129,14 +129,10 @@ system_context::~system_context()
     pool_.join();
 }
 
-static once_flag system_context_flag_;
-static unique_ptr<system_context> system_context_instance_;
-
 system_context& system_executor::context() const noexcept
 {
-    static auto init_system_context = []() { system_context_instance_ = make_unique<system_context>(); };
-    call_once(system_context_flag_, init_system_context);
-    return *system_context_instance_;
+    static system_context instance{};
+    return instance;
 }
 } // namespace v1
 } // namespace std::experimental::net

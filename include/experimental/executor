@@ -39,7 +39,7 @@ public:
 template <class CompletionToken, class Signature>
 struct async_completion
 {
-    using completion_handler_type = async_result<decay_t<CompletionToken>, Signature>::completion_handler_type;
+    using completion_handler_type = typename async_result<decay_t<CompletionToken>, Signature>::completion_handler_type;
 
     explicit async_completion(CompletionToken& t) : completion_handler(forward<CompletionToken>(t)), result(completion_handler) {}
     async_completion(const async_completion&) = delete;
@@ -57,8 +57,8 @@ struct associated_allocator
     static type get(const T&, const ProtoAllocator& a = {}) noexcept { return a; }
 };
 
-template <class T, class ProtoAllocator = allocator<void>, class = void_t<typename T::allocator_type>>
-struct associated_allocator
+template <class T, class ProtoAllocator>
+struct associated_allocator<T, ProtoAllocator, void_t<typename T::allocator_type>>
 {
     using type = typename T::allocator_type;
 
@@ -87,24 +87,31 @@ enum class fork_event
     child
 };
 
-class _Service_registry;
+class service_already_exists : public logic_error
+{
+public:
+    service_already_exists() : logic_error("Service already exists.") {}
+};
 
 class execution_context
 {
 public:
+    class _Service_registry;
     class service
     {
+    public:
+        virtual ~service() {}
+
     protected:
         explicit service(execution_context& owner) : context_(owner) {}
         service(const service&) = delete;
         service& operator=(const service&) = delete;
-        virtual ~service();
 
         execution_context& context() noexcept { return context_; }
 
-    private:
-        friend class _Service_registry;
+        friend class execution_context::_Service_registry;
 
+    private:
         virtual void shutdown() noexcept = 0;
         virtual void notify_fork(fork_event) {}
 
@@ -131,64 +138,59 @@ protected:
     void shutdown() noexcept { service_registry_.shutdown_services(); }
     void destroy() noexcept { service_registry_.destroy_services(); }
 
+public:
+    friend class _Service_registry;
+    class _Service_registry
+    {
+    public:
+        _Service_registry(execution_context& owner);
+
+        void shutdown_services();
+        void destroy_services();
+        void notify_fork(fork_event fork_ev);
+
+        template <typename Service>
+        typename Service::key_type& use_service()
+        {
+            lock_guard<mutex> lock{ mutex_ };
+            type_index tid{ typeid(typename Service::key_type) };
+            auto it{ services_.find(tid) };
+            if (it == services_.end())
+            {
+                it = services_.emplace(tid, make_unique<Service>(owner_)).first;
+            }
+            return *(it->second);
+        }
+
+        template <typename Service>
+        Service& add_service(unique_ptr<Service>&& new_service)
+        {
+            lock_guard<mutex> lock{ mutex_ };
+            type_index tid{ typeid(typename Service::key_type) };
+            if (services_.find(tid) != services_.end())
+            {
+                throw service_already_exists{};
+            }
+            auto it{ services_.emplace(tid, new_service).first };
+            return *(it->second);
+        }
+
+        template <typename Service>
+        bool has_service() const
+        {
+            lock_guard<mutex> lock{ mutex_ };
+            type_index tid{ typeid(typename Service::key_type) };
+            return services_.find(tid) != services_.end();
+        }
+
+    private:
+        mutable mutex mutex_;
+        execution_context& owner_;
+        map<type_index, unique_ptr<execution_context::service>> services_;
+    };
+
 private:
     _Service_registry service_registry_;
-};
-
-class service_already_exists : public logic_error
-{
-public:
-    service_already_exists() : logic_error("Service already exists.") {}
-};
-
-class _Service_registry
-{
-public:
-    _Service_registry(execution_context& owner);
-    ~_Service_registry();
-
-    void shutdown_services();
-    void destroy_services();
-    void notify_fork(fork_event fork_ev);
-
-    template <typename Service>
-    typename Service::key_type& use_service()
-    {
-        lock_guard<mutex> lock{ mutex_ };
-        type_index tid{ typeid(typename Service::key_type) };
-        auto it{ services_.find(tid) };
-        if (it == services_.end())
-        {
-            it = services_.emplace(tid, make_unique<Service>(ctx)).first;
-        }
-        return *(it->second);
-    }
-
-    template <typename Service>
-    Service& add_service(unique_ptr<Service>&& new_service)
-    {
-        lock_guard<mutex> lock{ mutex_ };
-        type_index tid{ typeid(typename Service::key_type) };
-        if (services_.find(tid) != services_.end())
-        {
-            throw service_already_exists{};
-        }
-        auto it{ services_.emplace(tid, new_service).first };
-        return *(it->second);
-    }
-
-    template <typename Service>
-    bool has_service() const
-    {
-        lock_guard<mutex> lock{ mutex_ };
-        type_index tid{ typeid(typename Service::key_type) };
-        return services_.find(tid) != services_.end();
-    }
-
-private:
-    mutable mutex mutex_;
-    execution_context& owner_;
-    map<type_index, unique_ptr<execution_context::service>> services_;
 };
 
 template <class Service>
@@ -213,14 +215,15 @@ template <class T, class = void, class = void, class = void, class = void, class
 struct is_executor : false_type
 {
 };
-template <class T,
-          class = void_t<decltype(&T::context)>,
-          class = void_t<decltype(&T::dispatch)>,
-          class = void_t<decltype(&T::post)>,
-          class = void_t<decltype(&T::defer)>,
-          class = void_t<decltype(&T::on_work_started)>,
-          class = void_t<decltype(&T::on_work_finished)>>
-struct is_executor : true_type
+template <class T>
+struct is_executor<
+    T,
+    void_t<decltype(&T::context)>,
+    void_t<decltype(&T::dispatch)>,
+    void_t<decltype(&T::post)>,
+    void_t<decltype(&T::defer)>,
+    void_t<decltype(&T::on_work_started)>,
+    void_t<decltype(&T::on_work_finished)>> : true_type
 {
 };
 
@@ -237,8 +240,8 @@ struct uses_executor : false_type
 {
 };
 
-template <class T, class Executor, class = void_t<typename T::executor_type>, class = enable_if_t<is_convertible_v<Executor, typename T::executor_type>>>
-struct uses_executor : true_type
+template <class T, class Executor>
+struct uses_executor<T, Executor, void_t<typename T::executor_type>, enable_if_t<is_convertible_v<Executor, typename T::executor_type>>> : true_type
 {
 };
 
@@ -266,8 +269,8 @@ struct associated_executor
     static type get(const T&, const Executor& e = {}) noexcept { return e; }
 };
 
-template <class T, class Executor = system_executor, class = void_t<typename T::executor_type>>
-struct associated_executor
+template <class T, class Executor>
+struct associated_executor<T, Executor, void_t<typename T::executor_type>>
 {
     using type = typename T::executor_type;
 
@@ -351,7 +354,7 @@ public:
     using completion_handler_type = executor_binder<typename async_result<T, Signature>::completion_handler_type, Executor>;
     using return_type = typename async_result<T, Signature>::return_type;
 
-    explicit async_result(completion_handler_type& h) : target_(t.get()) {}
+    explicit async_result(completion_handler_type& h) : target_(h.get()) {}
     async_result(const async_result&) = delete;
     async_result& operator=(const async_result&) = delete;
 
@@ -482,7 +485,7 @@ public:
     system_context& operator=(const system_context&) = delete;
     ~system_context();
 
-    executor_type get_executor() noexcept { return system_executor{}; }
+    executor_type get_executor() noexcept;
 
     void stop() { pool_.stop(); }
     bool stopped() const noexcept { return pool_.stopped(); }
@@ -515,7 +518,7 @@ public:
     template <class Func, class ProtoAllocator>
     void post(Func&& f, const ProtoAllocator& a) const
     {
-        typename allocator_traits<Allocator>::template rebind_alloc<decay_t<Func>> b{ a };
+        typename allocator_traits<ProtoAllocator>::template rebind_alloc<decay_t<Func>> b{ a };
         function<void()> tmp{ allocator_arg, b, forward<Func>(f) };
         context().pool_.post(move(tmp));
     }
@@ -528,6 +531,8 @@ public:
 
 inline bool operator==(const system_executor&, const system_executor&) { return true; }
 inline bool operator!=(const system_executor&, const system_executor&) { return false; }
+
+inline system_executor system_context::get_executor() noexcept { return {}; }
 
 class bad_executor : public exception
 {
@@ -581,7 +586,7 @@ public:
     template <class Executor, class ProtoAllocator>
     executor(allocator_arg_t, const ProtoAllocator& a, Executor e)
     {
-        typename allocator_traits<Allocator>::template rebind_alloc<char> b{ a };
+        typename allocator_traits<ProtoAllocator>::template rebind_alloc<char> b{ a };
         impl_ = allocate_shared<_Executor_impl<Executor, ProtoAllocator>>(b, move(e), a);
     }
 
@@ -624,21 +629,21 @@ public:
     template <class Func, class ProtoAllocator>
     void dispatch(Func&& f, const ProtoAllocator& a) const
     {
-        typename allocator_traits<Allocator>::template rebind_alloc<decay_t<Func>> b{ a };
+        typename allocator_traits<ProtoAllocator>::template rebind_alloc<decay_t<Func>> b{ a };
         function<void()> tmp{ allocator_arg, b, forward<Func>(f) };
         impl_->dispatch(move(tmp));
     }
     template <class Func, class ProtoAllocator>
     void post(Func&& f, const ProtoAllocator& a) const
     {
-        typename allocator_traits<Allocator>::template rebind_alloc<decay_t<Func>> b{ a };
+        typename allocator_traits<ProtoAllocator>::template rebind_alloc<decay_t<Func>> b{ a };
         function<void()> tmp{ allocator_arg, b, forward<Func>(f) };
         impl_->post(move(tmp));
     }
     template <class Func, class ProtoAllocator>
     void defer(Func&& f, const ProtoAllocator& a) const
     {
-        typename allocator_traits<Allocator>::template rebind_alloc<decay_t<Func>> b{ a };
+        typename allocator_traits<ProtoAllocator>::template rebind_alloc<decay_t<Func>> b{ a };
         function<void()> tmp{ allocator_arg, b, forward<Func>(f) };
         impl_->defer(move(tmp));
     }
@@ -690,7 +695,8 @@ inline auto dispatch(const Executor& ex, CompletionToken&& token)
 {
     async_completion<CompletionToken, void()> completion{ forward<CompletionToken>(token) };
     auto alloc{ get_associated_allocator(completion.completion_handler) };
-    auto f{ [h = move(completion.completion_handler), w = make_work_guard(h), &alloc]() {
+    auto f{ [h = move(completion.completion_handler), &alloc]() {
+        auto w{ make_work_guard(h) };
         w.get_executor().dispatch(move(h), alloc);
         w.reset();
     } };
@@ -717,7 +723,8 @@ inline auto post(const Executor& ex, CompletionToken&& token)
 {
     async_completion<CompletionToken, void()> completion{ forward<CompletionToken>(token) };
     auto alloc{ get_associated_allocator(completion.completion_handler) };
-    auto f{ [h = move(completion.completion_handler), w = make_work_guard(h), &alloc]() {
+    auto f{ [h = move(completion.completion_handler), &alloc]() {
+        auto w{ make_work_guard(h) };
         w.get_executor().dispatch(move(h), alloc);
         w.reset();
     } };
@@ -744,7 +751,8 @@ inline auto defer(const Executor& ex, CompletionToken&& token)
 {
     async_completion<CompletionToken, void()> completion{ forward<CompletionToken>(token) };
     auto alloc{ get_associated_allocator(completion.completion_handler) };
-    auto f{ [h = move(completion.completion_handler), w = make_work_guard(h), &alloc]() {
+    auto f{ [h = move(completion.completion_handler), &alloc]() {
+        auto w{ make_work_guard(h) };
         w.get_executor().dispatch(move(h), alloc);
         w.reset();
     } };
@@ -833,7 +841,7 @@ public:
     template <class Func, class ProtoAllocator>
     void defer(Func&& f, const ProtoAllocator& a) const
     {
-        inner_ex_.defer(forward<func>(f), a);
+        inner_ex_.defer(forward<Func>(f), a);
     }
 
 private:
