@@ -25,9 +25,9 @@ namespace ip
 {
 enum class resolver_errc
 {
-    host_not_found = EAI_NONAME,
-    try_again = EAI_AGAIN,
-    service_not_found = EAI_SERVICE
+    host_not_found = WSAHOST_NOT_FOUND,
+    try_again = WSATRY_AGAIN,
+    service_not_found = WSATYPE_NOT_FOUND
 };
 
 struct _Resolver_category : error_category
@@ -1010,6 +1010,8 @@ protected:
     ~resolver_base() = default;
 };
 
+FLAGS_OPERATOR(resolver_base::flags)
+
 template <class InternetProtocol>
 class basic_resolver : public resolver_base
 {
@@ -1204,11 +1206,11 @@ public:
         int flags{ 0 };
         if (e.protocol().type() == SOCK_DGRAM)
             flags |= NI_DGRAM;
-        int result{ ::getnameinfo((const sockaddr*)e.data(), e.size(), host_name, 256, service_name, 256, flags) };
+        int result{ ::getnameinfo((const sockaddr*)e.data(), (socklen_t)e.size(), host_name, 256, service_name, 256, flags) };
         if (result != 0)
         {
             flags |= NI_NUMERICSERV;
-            result = ::getnameinfo((const sockaddr*)e.data(), e.size(), host_name, 256, service_name, 256, flags);
+            result = ::getnameinfo((const sockaddr*)e.data(), (socklen_t)e.size(), host_name, 256, service_name, 256, flags);
         }
         if (result != 0)
         {

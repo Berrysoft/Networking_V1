@@ -10,6 +10,17 @@
 #define NET_API __declspec(dllimport)
 #endif
 
+#ifndef FLAGS_OPERATOR
+#define FLAGS_OPERATOR(FlagsType)                                                                                 \
+    constexpr FlagsType operator&(FlagsType f1, FlagsType f2) noexcept { return FlagsType{ (int)f1 & (int)f2 }; } \
+    constexpr FlagsType operator|(FlagsType f1, FlagsType f2) noexcept { return FlagsType{ (int)f1 | (int)f2 }; } \
+    constexpr FlagsType operator^(FlagsType f1, FlagsType f2) noexcept { return FlagsType{ (int)f1 ^ (int)f2 }; } \
+    constexpr FlagsType operator~(FlagsType f) noexcept { return FlagsType{ ~(int)f }; }                          \
+    constexpr FlagsType& operator&=(FlagsType& f1, FlagsType f2) noexcept { return f1 = (f1 & f2); }              \
+    constexpr FlagsType& operator|=(FlagsType& f1, FlagsType f2) noexcept { return f1 = (f1 | f2); }              \
+    constexpr FlagsType& operator^=(FlagsType& f1, FlagsType f2) noexcept { return f1 = (f1 ^ f2); }
+#endif
+
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
 

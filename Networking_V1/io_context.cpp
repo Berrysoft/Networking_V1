@@ -56,10 +56,13 @@ void io_context::stop()
     ::PostQueuedCompletionStatus(port_, 0, 0, nullptr);
     ::CloseHandle(port_);
     port_ = nullptr;
+    ::WSACleanup();
 }
 
 void io_context::_Start()
 {
+    WSAData data;
+    ::WSAStartup(WINSOCK_VERSION, &data);
     port_ = ::CreateIoCompletionPort(INVALID_HANDLE_VALUE, nullptr, 0, concurrency_hint_);
 }
 } // namespace v1

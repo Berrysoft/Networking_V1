@@ -152,7 +152,7 @@ namespace NetworkingTest
 			Assert::AreEqual("0.0.0.0 127.0.0.1 255.255.255.255", oss.str().c_str());
 		}
 
-		TEST_METHOD(ResolveTestTCP)
+		TEST_METHOD(ResolveTestTCP1)
 		{
 			error_code ec{};
 			io_context ctx;
@@ -165,11 +165,47 @@ namespace NetworkingTest
 
 			auto addrs2{ res.resolve("localhost","http") };
 			Assert::IsTrue(addrs == addrs2);
+		}
 
-			for (auto& addr : addrs)
-			{
-				Logger::WriteMessage(addr.endpoint().address().to_string().c_str());
-			}
+		TEST_METHOD(ResolveTestTCP2)
+		{
+			error_code ec{};
+			io_context ctx;
+			tcp::resolver res{ ctx };
+			auto flags{ resolver_base::numeric_host | tcp::resolver::numeric_service };
+			auto addrs{ res.resolve("127.0.0.1", "42", flags, ec) };
+			Assert::IsTrue(!ec);
+			Assert::IsTrue(addrs.size() > 0);
+			Assert::IsTrue(addrs.begin() != addrs.end());
+
+			auto addrs2{ res.resolve("127.0.0.1","42",flags) };
+			Assert::IsTrue(addrs == addrs2);
+
+			addrs = res.resolve("localhost", "42", flags, ec);
+			Assert::IsTrue(!!ec);
+			Assert::IsTrue(addrs.empty());
+
+			addrs = res.resolve("127.0.0.1", "nameserver", flags, ec);
+			Assert::IsTrue(!!ec);
+			Assert::IsTrue(addrs.empty());
+
+			Assert::ExpectException<system_error>([&res, flags]() {res.resolve("localhost", "http", flags); });
+		}
+
+		TEST_METHOD(ResolveTestTCP3)
+		{
+			error_code ec{};
+			io_context ctx;
+			tcp::resolver res{ ctx };
+			tcp::endpoint home{ address_v4::loopback(), 80 };
+			auto addrs{ res.resolve(home, ec) };
+			Assert::IsTrue(!ec);
+			Assert::AreEqual(size_t(1), addrs.size());
+			Assert::IsTrue(addrs.begin() != addrs.end());
+			Assert::IsFalse(addrs.empty());
+
+			auto addrs2{ res.resolve(home) };
+			Assert::IsTrue(addrs == addrs2);
 		}
 	};
 }
