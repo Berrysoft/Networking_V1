@@ -87,7 +87,7 @@ public:
     executor_type get_executor() noexcept { return executor_type{ *this }; }
     HANDLE _Native_handle() noexcept { return port_; }
 
-    count_type _Do_one(DWORD msec);
+    NET_API count_type _Do_one(DWORD msec);
 
     count_type run_one() { return _Do_one(INFINITE); }
     template <class Clock, class Duration>
@@ -128,7 +128,7 @@ public:
         return n;
     }
 
-    count_type poll_one();
+    NET_API count_type poll_one();
     count_type poll()
     {
         count_type n{ 0 };
@@ -138,7 +138,7 @@ public:
         return n;
     }
 
-    void stop();
+    NET_API void stop();
     bool stopped() const noexcept { return port_; }
     void restart()
     {
@@ -147,7 +147,7 @@ public:
     }
 
 private:
-    void _Start();
+    NET_API void _Start();
 
     friend struct _Io_context_monitor;
 

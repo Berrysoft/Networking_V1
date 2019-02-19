@@ -14,8 +14,6 @@ execution_context::~execution_context()
     destroy();
 }
 
-execution_context::_Service_registry::_Service_registry(execution_context& owner) : owner_(owner) {}
-
 void execution_context::_Service_registry::shutdown_services()
 {
     for (auto& svc : services_)

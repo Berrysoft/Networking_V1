@@ -8,6 +8,7 @@ namespace ip
 {
 address_v4 make_address_v4(const char* str, error_code& ec) noexcept
 {
+    ec = error_code{};
     address_v4::bytes_type bytes;
     int r{ ::inet_pton(AF_INET, str, bytes.data()) };
     if (r != 1)
@@ -17,6 +18,7 @@ address_v4 make_address_v4(const char* str, error_code& ec) noexcept
 
 address_v6 make_address_v6(const char* str, error_code& ec) noexcept
 {
+    ec = error_code{};
     sockaddr_in6 s{};
     int size = sizeof(sockaddr_in6);
     size_t len = strlen(str);
@@ -83,6 +85,7 @@ basic_address_iterator<address_v6>& basic_address_iterator<address_v6>::operator
 
 network_v4 make_network_v4(const string& str, error_code& ec) noexcept
 {
+    ec = error_code{};
     auto pos{ str.find_first_of('/') };
     if (pos == string::npos)
     {
@@ -114,6 +117,7 @@ network_v4 make_network_v4(const string& str, error_code& ec) noexcept
 
 network_v6 make_network_v6(const string& str, error_code& ec) noexcept
 {
+    ec = error_code{};
     auto pos{ str.find_first_of('/') };
     if (pos == string::npos)
     {

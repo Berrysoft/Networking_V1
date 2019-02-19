@@ -50,7 +50,7 @@ inline const error_category& stream_category() noexcept
 inline error_code make_error_code(stream_errc e) noexcept { return error_code{ static_cast<int>(e), stream_category() }; }
 inline error_condition make_error_condition(stream_errc e) noexcept { return error_condition{ static_cast<int>(e), stream_category() }; }
 
-template <class T>
+template <class D, class T, class CT>
 class _Buffer_base
 {
 public:
@@ -59,38 +59,38 @@ public:
 
     T* data() const noexcept { return data_; }
     size_t size() const noexcept { return size_; }
-    _Buffer_base& operator+=(size_t n) noexcept
+    D& operator+=(size_t n) noexcept
     {
         n = min(n, size_);
-        data_ = static_cast<char*>(data_) + n;
+        data_ = static_cast<CT*>(data_) + n;
         size_ -= n;
-        return *this;
+        return *static_cast<D*>(this);
     }
 
-    friend _Buffer_base operator+(const _Buffer_base& b, size_t n) noexcept
+    friend D operator+(const D& b, size_t n) noexcept
     {
-        n = min(n, size_);
-        return _Buffer_base{ static_cast<char*>(b.data_) + n, b.size_ - n };
+        n = min(n, b.size_);
+        return D{ static_cast<CT*>(b.data_) + n, b.size_ - n };
     }
-    friend _Buffer_base operator+(size_t n, const _Buffer_base& b) noexcept { return b + n; }
+    friend D operator+(size_t n, const D& b) noexcept { return b + n; }
 
 private:
     T* data_;
     size_t size_;
 };
 
-class mutable_buffer : public _Buffer_base<void>
+class mutable_buffer : public _Buffer_base<mutable_buffer, void, char>
 {
 public:
-    using _Buffer_base<void>::_Buffer_base;
+    using _Buffer_base<mutable_buffer, void, char>::_Buffer_base;
 };
 
-class const_buffer : public _Buffer_base<const void>
+class const_buffer : public _Buffer_base<const_buffer, const void, const char>
 {
 public:
-    using _Buffer_base<const void>::_Buffer_base;
+    using _Buffer_base<const_buffer, const void, const char>::_Buffer_base;
 
-    const_buffer(const mutable_buffer& b) noexcept : _Buffer_base<const void>(b.data(), b.size()) {}
+    const_buffer(const mutable_buffer& b) noexcept : _Buffer_base<const_buffer, const void, const char>(b.data(), b.size()) {}
 };
 
 inline const mutable_buffer* buffer_sequence_begin(const mutable_buffer& b) noexcept { return addressof(b); }

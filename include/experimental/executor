@@ -118,10 +118,10 @@ public:
         execution_context& context_;
     };
 
-    execution_context();
+    NET_API execution_context();
     execution_context(const execution_context&) = delete;
     execution_context& operator=(const execution_context&) = delete;
-    virtual ~execution_context();
+    NET_API virtual ~execution_context();
 
     void notify_fork(fork_event e) { service_registry_.notify_fork(e); }
 
@@ -143,11 +143,11 @@ public:
     class _Service_registry
     {
     public:
-        _Service_registry(execution_context& owner);
+        _Service_registry(execution_context& owner) : owner_(owner) {}
 
-        void shutdown_services();
-        void destroy_services();
-        void notify_fork(fork_event fork_ev);
+        NET_API void shutdown_services();
+        NET_API void destroy_services();
+        NET_API void notify_fork(fork_event fork_ev);
 
         template <typename Service>
         typename Service::key_type& use_service()
@@ -464,16 +464,16 @@ private:
     bool stopped_;
 
 public:
-    _Thread_pool();
+    NET_API _Thread_pool();
 
-    void start();
-    void post(function<void()>&& f);
-    void stop();
-    void join();
+    NET_API void start();
+    NET_API void post(function<void()>&& f);
+    NET_API void stop();
+    NET_API void join();
     bool stopped() const noexcept { return stopped_; }
 
 private:
-    void do_job();
+    NET_API void do_job();
 };
 
 class system_context : public execution_context
@@ -483,7 +483,7 @@ public:
 
     system_context(const system_context&) = delete;
     system_context& operator=(const system_context&) = delete;
-    ~system_context();
+    NET_API ~system_context();
 
     executor_type get_executor() noexcept;
 
@@ -494,7 +494,7 @@ public:
 private:
     friend class system_executor;
 
-    system_context();
+    NET_API system_context();
 
     _Thread_pool pool_;
 };
@@ -504,7 +504,7 @@ class system_executor
 public:
     system_executor() {}
 
-    system_context& context() const noexcept;
+    NET_API system_context& context() const noexcept;
 
     void on_work_started() const noexcept {}
     void on_work_finished() const noexcept {}

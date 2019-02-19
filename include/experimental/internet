@@ -141,7 +141,7 @@ public:
         if (r)
             return { r, a };
         else
-            return { a };
+            return basic_string<char, char_traits<char>, Allocator>{ a };
     }
 
     static constexpr address_v4 any() noexcept { return address_v4{}; }
@@ -167,7 +167,7 @@ inline basic_ostream<CharT, Traits>& operator<<(basic_ostream<CharT, Traits>& s,
 
 constexpr address_v4 make_address_v4(const address_v4::bytes_type& bytes) { return address_v4{ bytes }; }
 constexpr address_v4 make_address_v4(address_v4::uint_type val) { return address_v4{ val }; }
-address_v4 make_address_v4(const char*, error_code&) noexcept;
+NET_API address_v4 make_address_v4(const char*, error_code&) noexcept;
 inline address_v4 make_address_v4(const char* str) { _CHECK_ERROR_CODE_INVOKE_FUNC(make_address_v4(str, ec)); }
 inline address_v4 make_address_v4(const string& str, error_code& ec) noexcept { return make_address_v4(str.c_str(), ec); }
 inline address_v4 make_address_v4(const string& str) { return make_address_v4(str.c_str()); }
@@ -204,6 +204,7 @@ public:
     }
     constexpr ::in6_addr& _Addr() noexcept { return addr_; }
     constexpr const ::in6_addr& _Addr() const noexcept { return addr_; }
+    constexpr scope_id_type& _Scope_id() noexcept { return scope_id_; }
 
     void scope_id(scope_id_type id) noexcept { scope_id_ = id; }
     constexpr scope_id_type scope_id() const noexcept { return scope_id_; }
@@ -276,7 +277,7 @@ public:
         if (r)
             return { r, a };
         else
-            return { a };
+            return basic_string<char, char_traits<char>, Allocator>{ a };
     }
 
     static constexpr address_v6 any() noexcept { return address_v6{}; }
@@ -332,7 +333,7 @@ constexpr address_v6 make_address_v6(v4_mapped_t, const address_v4& a) noexcept
     address_v6::bytes_type v6b{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, v4b[0], v4b[1], v4b[2], v4b[3] };
     return address_v6{ v6b };
 }
-address_v6 make_address_v6(const char*, error_code&) noexcept;
+NET_API address_v6 make_address_v6(const char*, error_code&) noexcept;
 inline address_v6 make_address_v6(const char* str) { _CHECK_ERROR_CODE_INVOKE_FUNC(make_address_v6(str, ec)); }
 inline address_v6 make_address_v6(const string& str, error_code& ec) noexcept { return make_address_v6(str.c_str(), ec); }
 inline address_v6 make_address_v6(const string& str) { return make_address_v6(str.c_str()); }
@@ -439,7 +440,7 @@ inline basic_ostream<CharT, Traits>& operator<<(basic_ostream<CharT, Traits>& s,
     return s << a.to_string().c_str();
 }
 
-address make_address(const char*, error_code&) noexcept;
+NET_API address make_address(const char*, error_code&) noexcept;
 inline address make_address(const char* str) { _CHECK_ERROR_CODE_INVOKE_FUNC(make_address(str, ec)); }
 inline address make_address(const string& str, error_code& ec) noexcept { return make_address(str.c_str(), ec); }
 inline address make_address(const string& str) { return make_address(str.c_str()); }
@@ -463,14 +464,14 @@ public:
 
     reference operator*() const noexcept { return address_; }
     pointer operator->() const noexcept { return addressof(address_); }
-    basic_address_iterator& operator++() noexcept;
+    NET_API basic_address_iterator& operator++() noexcept;
     basic_address_iterator operator++(int) noexcept
     {
         basic_address_iterator tmp{ *this };
         ++(*this);
         return tmp;
     }
-    basic_address_iterator& operator--() noexcept;
+    NET_API basic_address_iterator& operator--() noexcept;
     basic_address_iterator operator--(int) noexcept
     {
         basic_address_iterator tmp{ *this };
@@ -501,14 +502,14 @@ public:
 
     reference operator*() const noexcept { return address_; }
     pointer operator->() const noexcept { return addressof(address_); }
-    basic_address_iterator& operator++() noexcept;
+    NET_API basic_address_iterator& operator++() noexcept;
     basic_address_iterator operator++(int) noexcept
     {
         basic_address_iterator tmp{ *this };
         ++(*this);
         return tmp;
     }
-    basic_address_iterator& operator--() noexcept;
+    NET_API basic_address_iterator& operator--() noexcept;
     basic_address_iterator operator--(int) noexcept
     {
         basic_address_iterator tmp{ *this };
@@ -674,7 +675,7 @@ inline basic_ostream<CharT, Traits>& operator<<(basic_ostream<CharT, Traits>& s,
 
 inline network_v4 make_network_v4(const address_v4& addr, int prefix_len) { return network_v4{ addr, prefix_len }; }
 inline network_v4 make_network_v4(const address_v4& addr, const address_v4& mask) { return network_v4{ addr, mask }; }
-network_v4 make_network_v4(const string&, error_code&) noexcept;
+NET_API network_v4 make_network_v4(const string&, error_code&) noexcept;
 inline network_v4 make_network_v4(const string& str) { _CHECK_ERROR_CODE_INVOKE_FUNC(make_network_v4(str, ec)); }
 inline network_v4 make_network_v4(const char* str, error_code& ec) noexcept { return make_network_v4(string{ str }, ec); }
 inline network_v4 make_network_v4(const char* str) { return make_network_v4(string{ str }); }
@@ -757,7 +758,7 @@ inline basic_ostream<CharT, Traits>& operator<<(basic_ostream<CharT, Traits>& s,
 }
 
 inline network_v6 make_network_v6(const address_v6& addr, int prefix_len) { return network_v6{ addr, prefix_len }; }
-network_v6 make_network_v6(const string&, error_code&) noexcept;
+NET_API network_v6 make_network_v6(const string&, error_code&) noexcept;
 inline network_v6 make_network_v6(const string& str) { _CHECK_ERROR_CODE_INVOKE_FUNC(make_network_v6(str, ec)); }
 inline network_v6 make_network_v6(const char* str, error_code& ec) noexcept { return make_network_v6(string{ str }, ec); }
 inline network_v6 make_network_v6(const char* str) { return make_network_v6(string{ str }); }
@@ -770,7 +771,7 @@ class basic_endpoint
 public:
     using protocol_type = InternetProtocol;
 
-    constexpr basic_endpoint() noexcept : data_() { data_.v4.sin_family = protocal_type::v4().family(); }
+    constexpr basic_endpoint() noexcept : data_() { data_.v4.sin_family = protocol_type::v4().family(); }
     constexpr basic_endpoint(const protocol_type& proto, port_type port_num) noexcept : data_()
     {
         data_.v4.sin_family = proto.family();
@@ -810,7 +811,7 @@ public:
         {
             address_v6 addr{};
             _Memcpy(addr._Addr().s6_addr, data_.v6.sin6_addr.s6_addr, 16);
-            addr.scope_id = data_.v6.sin6_scope_id;
+            addr._Scope_id() = data_.v6.sin6_scope_id;
             return addr;
         }
     }
@@ -1034,7 +1035,7 @@ public:
 
     executor_type get_executor() noexcept { return ctx_->get_executor(); }
 
-    void cancel();
+    void cancel() {}
 
     results_type resolve(string_view host_name, string_view service_name, flags f, error_code& ec)
     {
@@ -1057,9 +1058,9 @@ public:
             for (::addrinfo* ptr{ result }; ptr; ptr = ptr->ai_next)
             {
                 if (ptr->ai_family == AF_INET)
-                    results.results_.emplace_back(*(::sockaddr_in*)ptr->ai_addr, ptr->ai_canonname, service_name);
+                    results.results_.emplace_back(*(::sockaddr_in*)ptr->ai_addr, host_name, service_name);
                 else
-                    results.results_.emplace_back(*(::sockaddr_in6*)ptr->ai_addr, ptr->ai_canonname, service_name);
+                    results.results_.emplace_back(*(::sockaddr_in6*)ptr->ai_addr, host_name, service_name);
             }
         }
         ::freeaddrinfo(result);
@@ -1087,14 +1088,14 @@ public:
         ::addrinfoexA* result{ nullptr };
         _Io_operation* op{ new _Io_operation{} };
         op->overlapped.hEvent = ::WSACreateEvent();
-        op->operation = [token = forward<CompletionToken>(token), &result, service_name](_Io_operation*, DWORD) {
+        op->operation = [token = forward<CompletionToken>(token), &result, host_name, service_name](_Io_operation*, DWORD) {
             results_type results{};
             for (::addrinfoexA* ptr{ result }; ptr; ptr = ptr->ai_next)
             {
                 if (ptr->ai_family == AF_INET)
-                    results.results_.emplace_back(*(::sockaddr_in*)ptr->ai_addr, ptr->ai_canonname, service_name);
+                    results.results_.emplace_back(*(::sockaddr_in*)ptr->ai_addr, host_name, service_name);
                 else
-                    results.results_.emplace_back(*(::sockaddr_in6*)ptr->ai_addr, ptr->ai_canonname, service_name);
+                    results.results_.emplace_back(*(::sockaddr_in6*)ptr->ai_addr, host_name, service_name);
             }
             ::FreeAddrInfoEx(result);
             token(error_code{}, results);
@@ -1138,9 +1139,9 @@ public:
         for (::addrinfo* ptr{ result }; ptr; ptr = ptr->ai_next)
         {
             if (ptr->ai_family == AF_INET)
-                results.results_.emplace_back(*(::sockaddr_in*)ptr->ai_addr, ptr->ai_canonname, service_name);
+                results.results_.emplace_back(*(::sockaddr_in*)ptr->ai_addr, host_name, service_name);
             else
-                results.results_.emplace_back(*(::sockaddr_in6*)ptr->ai_addr, ptr->ai_canonname, service_name);
+                results.results_.emplace_back(*(::sockaddr_in6*)ptr->ai_addr, host_name, service_name);
         }
         ::freeaddrinfo(result);
         return results;
@@ -1167,14 +1168,14 @@ public:
         ::addrinfoexA* result{ nullptr };
         _Io_operation* op{ new _Io_operation{} };
         op->overlapped.hEvent = ::WSACreateEvent();
-        op->operation = [token = forward<CompletionToken>(token), &result, service_name](_Io_operation*, DWORD) {
+        op->operation = [token = forward<CompletionToken>(token), &result, host_name, service_name](_Io_operation*, DWORD) {
             results_type results{};
             for (::addrinfoexA* ptr{ result }; ptr; ptr = ptr->ai_next)
             {
                 if (ptr->ai_family == AF_INET)
-                    results.results_.emplace_back(*(::sockaddr_in*)ptr->ai_addr, ptr->ai_canonname, service_name);
+                    results.results_.emplace_back(*(::sockaddr_in*)ptr->ai_addr, host_name, service_name);
                 else
-                    results.results_.emplace_back(*(::sockaddr_in6*)ptr->ai_addr, ptr->ai_canonname, service_name);
+                    results.results_.emplace_back(*(::sockaddr_in6*)ptr->ai_addr, host_name, service_name);
             }
             ::FreeAddrInfoEx(result);
             token(error_code{}, results);
